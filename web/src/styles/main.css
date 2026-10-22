@@ -662,9 +662,10 @@ kbd {
   width: 104px;
 }
 .size-column {
-  width: 67px;
+  width: 88px;
   text-align: right !important;
   padding-right: 12px;
+  white-space: nowrap;
 }
 .actions-column {
   width: 96px;
@@ -1863,7 +1864,7 @@ kbd {
     width: 95px;
   }
   .size-column {
-    width: 63px;
+    width: 76px;
   }
   .global-search {
     width: 205px;
