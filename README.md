@@ -44,7 +44,7 @@ go run ./cmd/server
 
 打开 <http://127.0.0.1:8080>，账号为 `admin`，密码为刚设置的值。初始化会创建三个空目录和一份真实使用指南，不生成模拟团队成员或上传记录。
 
-SQLite 数据库与文件保存在项目的 `data/`。该目录已被 Git 忽略。数据库非空时，`ADMIN_PASSWORD` 不会重置已有账号密码。
+SQLite 数据库与文件保存在项目的 `data/`。该目录已被 Git 忽略。数据库非空时，`ADMIN_PASSWORD` 不会重置已有账号密码。生产环境初始化完成后可从运行配置中移除此变量，再重启服务，避免长期保留明文初始密码。
 
 ### 前端开发
 
@@ -128,6 +128,7 @@ deploy/                     Nginx、systemd、备份及证书续期配置
 
 ```bash
 cd web && npm ci && npm run build && cd ..
+mkdir -p bin
 CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build \
   -trimpath -ldflags='-s -w' -o bin/office-share ./cmd/server
 ```
@@ -173,7 +174,9 @@ Cloudflare 建议使用 **Full (strict)**。当前 Nginx 对请求体限制 92 M
 
 ### 更新与回滚
 
-将新版本放到新 release 目录，切换 `current` 并重启 `office-share`。健康检查失败时将链接切回上一 release 并重启。持久化数据与 release 分离；后续有数据库破坏性迁移时，需要额外的数据库回滚方案。
+将新版本放到新 release 目录，切换 `current` 并重启 `office-share`。健康检查失败时将链接切回上一 release 并重启。`deploy/release.sh` 可在服务器上完成解包、规范化权限、切换链接、重启和健康检查；检查失败时切回旧链接。首次部署仍需先创建系统用户、数据目录和环境配置。
+
+持久化数据与 release 分离；后续有数据库破坏性迁移时，需要额外的数据库回滚方案。
 
 ### 运维
 
@@ -194,7 +197,7 @@ sudo systemctl start office-share-backup.service
 
 恢复前应停止应用，并对当前数据另做备份；将归档中的 `office.db` 和 `files/` 恢复到一个新的数据目录，修正属主后更新 `DATA_DIR`、重启并验证。不要将旧数据库与新目录中的 WAL/SHM 文件混用。
 
-**同一硬盘上的备份不能抵御整机或硬盘丢失。** 请另行设置异机/对象存储备份与保留策略。脚本默认不自动删除备份，需监控磁盘余量。MySQL 模式需另做数据库备份，此脚本仅用于 SQLite。
+**同一硬盘上的备份仅覆盖部分误操作风险，整机或硬盘丢失需要异机备份。** 请另行设置异机/对象存储备份与保留策略。脚本默认不自动删除备份，需监控磁盘余量。MySQL 模式需另做数据库备份，此脚本仅用于 SQLite。
 
 ## 验证
 

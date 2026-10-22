@@ -7,7 +7,12 @@ export async function request(path, options = {}) {
       ...options.headers,
     },
   });
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error('网络响应异常，请稍后重试');
+  }
   if (!response.ok) {
     if (response.status === 401 && path !== '/login') {
       window.dispatchEvent(new Event('session-expired'));
