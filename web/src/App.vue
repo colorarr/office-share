@@ -1032,10 +1032,10 @@ onUnmounted(() => {
             ><button @click="modal = 'help'">使用帮助<AppIcon name="external" :size="13" /></button>
           </footer>
         </main>
-        <aside class="right-panel">
+        <aside class="right-panel" aria-label="空间概览与动态">
           <section class="space-overview">
             <div class="section-title">
-              <h2>在这张桌上</h2>
+              <h2>空间概览</h2>
               <AppIcon name="squares" :size="17" />
             </div>
             <p class="space-overview-description">全空间统计，包含所有文件夹。</p>
@@ -1070,59 +1070,59 @@ onUnmounted(() => {
               </div>
             </div>
           </section>
-          <div class="online-heading">
-            <h2>团队协作</h2>
-            <span class="online-count"><i></i>{{ overview.online }} 人在线</span>
-          </div>
-          <div class="online-summary">
-            <span class="avatar">{{ user.name.slice(0, 1) }}</span>
-            <div>
-              <strong>{{ user.name }}<span>（你）</span></strong
-              ><small>{{ connection === 'online' ? '正在工作空间中' : '正在连接工作空间' }}</small>
+          <section class="team-panel" aria-labelledby="team-panel-title">
+            <div class="online-heading">
+              <h2 id="team-panel-title">团队协作</h2>
+              <span class="online-count"><i></i>{{ overview.online }} 人在线</span>
             </div>
-            <button class="invite-mini" aria-label="查看和添加团队成员" @click="showMembers">
-              <AppIcon name="plus" :size="17" />
-            </button>
-          </div>
-          <button class="members-link" @click="showMembers">
-            查看 {{ overview.members }} 位团队成员<AppIcon name="right" :size="13" />
-          </button>
-          <div class="right-divider"></div>
-          <div class="section-title">
-            <h2>空间动态</h2>
-            <AppIcon name="clock" :size="17" />
-          </div>
-          <div v-if="!overview.activity.length" class="activity-empty">
-            <p>每一份分享，都从这里开始。</p>
-            <span>团队的新动态会实时显示。</span>
-          </div>
-          <div v-else class="activity-list">
-            <div
-              v-for="(activity, index) in overview.activity"
-              :key="`${activity.created}-${index}`"
-              class="activity-item"
-            >
-              <span class="activity-dot"></span>
+            <div class="online-summary">
+              <span class="avatar">{{ user.name.slice(0, 1) }}</span>
               <div>
-                <p>
-                  <strong>{{ activity.name }}</strong> {{ activity.action }}
-                </p>
-                <span class="activity-target">{{ activity.target }}</span
-                ><small>{{ dateLabel(activity.created) }}</small>
+                <strong>{{ user.name }}<span>（你）</span></strong
+                ><small>{{
+                  connection === 'online' ? '正在工作空间中' : '正在连接工作空间'
+                }}</small>
               </div>
+              <button class="invite-mini" aria-label="查看和添加团队成员" @click="showMembers">
+                <AppIcon name="plus" :size="17" />
+              </button>
             </div>
-          </div>
-          <div class="right-divider"></div>
-          <section class="desk-shortcuts">
-            <h2>少一点来回传。</h2>
-            <p>截图后粘贴，灵感随手分享。<br />点开文档，直接查看正文。</p>
-            <button class="text-button" @click="modal = 'help'">
-              查看快捷操作<AppIcon name="arrow" :size="15" />
+            <button class="members-link" @click="showMembers">
+              查看 {{ overview.members }} 位团队成员<AppIcon name="right" :size="13" />
             </button>
           </section>
-          <div class="right-bottom">
-            <AppIcon name="cloud" :size="16" /><span>你的分享，团队实时可见。</span>
-          </div>
+          <section class="activity-panel" aria-labelledby="activity-panel-title">
+            <div class="section-title">
+              <h2 id="activity-panel-title">最近动态</h2>
+              <AppIcon name="clock" :size="17" />
+            </div>
+            <div v-if="!overview.activity.length" class="activity-empty">
+              <p>每一份分享，都从这里开始。</p>
+              <span>团队的新动态会实时显示。</span>
+            </div>
+            <div
+              v-else
+              class="activity-list"
+              tabindex="0"
+              role="region"
+              aria-label="最近动态，可上下滚动查看"
+            >
+              <div
+                v-for="(activity, index) in overview.activity"
+                :key="`${activity.created}-${index}`"
+                class="activity-item"
+              >
+                <span class="activity-dot"></span>
+                <div>
+                  <p>
+                    <strong>{{ activity.name }}</strong> {{ activity.action }}
+                  </p>
+                  <span class="activity-target" :title="activity.target">{{ activity.target }}</span
+                  ><small>{{ dateLabel(activity.created) }}</small>
+                </div>
+              </div>
+            </div>
+          </section>
         </aside>
       </div>
     </div>

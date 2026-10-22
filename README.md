@@ -27,7 +27,7 @@
 
 ## 界面方向
 
-依据 `design-taste-frontend` 的应用界面流程重设计，采用 Achromatic ledger 方向：顶部导航、蓝灰纸面、白色资料区与黑色主操作，配合自托管 Geist 字体。桌面聚焦文件表格与团队动态，手机折叠导航并将表格元数据合并为可读的资料行。图片缩略图、正文预览、失败重试与原文件传输保持一致。设计说明见 [docs/design/redesign.md](docs/design/redesign.md)。
+依据 `design-taste-frontend` 的应用界面流程重设计，采用 Achromatic ledger 方向：顶部导航、蓝灰纸面、白色资料区与黑色主操作，配合自托管 Geist 字体。桌面采用最大 1680px 的流式工作区，资料列表优先；右侧概览、成员与动态独立成块，动态限高并单独滚动，少量文件时也不会被长活动流撑长。手机折叠导航并将表格元数据合并为可读的资料行。图片缩略图、正文预览、失败重试与原文件传输保持一致。设计说明见 [docs/design/redesign.md](docs/design/redesign.md)。
 
 ## 快速启动
 
