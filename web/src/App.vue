@@ -53,6 +53,8 @@ const form = ref({});
 const formError = ref('');
 const members = ref([]);
 const preview = ref(null);
+const rowMenu = ref(null);
+let rowMenuTrigger;
 const mobileNav = ref(false);
 const transferOpen = ref(false);
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
@@ -144,7 +146,7 @@ const allSelected = computed(
     filtered.value.length > 0 && filtered.value.every((item) => selection.value.includes(item.id)),
 );
 const storagePercent = computed(() =>
-  Math.min(100, Math.max(1, (overview.value.used / overview.value.quota) * 100)),
+  Math.min(100, Math.max(0, (overview.value.used / overview.value.quota) * 100)),
 );
 const connectionLabel = computed(() =>
   connection.value === 'online'
@@ -156,15 +158,11 @@ const connectionLabel = computed(() =>
 const completedCount = computed(
   () => transfers.value.filter((task) => task.status === 'done').length,
 );
-const guide = [
-  { icon: 'upload', label: '拖进来，就共享', description: '将文件或图片拖到这里，即可上传。' },
-  {
-    icon: 'copy',
-    label: '截图，粘贴，发送',
-    description: `截图后按 ${modifier} + V，让想法更直观。`,
-  },
-  { icon: 'users', label: '一起工作，不必等待', description: '多人同时传输，新内容实时可见。' },
-];
+const sharedCounts = computed(() => ({
+  files: activeItems.value.filter((item) => item.kind === 'file').length,
+  images: activeItems.value.filter((item) => item.kind === 'image').length,
+  texts: activeItems.value.filter((item) => item.kind === 'text').length,
+}));
 
 async function login() {
   if (busy.value) return;
@@ -182,6 +180,7 @@ async function login() {
   }
 }
 function navigate(id) {
+  rowMenu.value = null;
   view.value = id;
   parent.value = '';
   tab.value = 'all';
@@ -190,11 +189,44 @@ function navigate(id) {
   mobileNav.value = false;
 }
 function enterFolder(id = '') {
+  rowMenu.value = null;
   parent.value = id;
   view.value = 'all';
   query.value = '';
   tab.value = 'all';
   selection.value = [];
+}
+function showRowMenu(item, event) {
+  if (rowMenu.value?.item.id === item.id) {
+    rowMenu.value = null;
+    return;
+  }
+  rowMenuTrigger = event.currentTarget;
+  const rect = event.currentTarget.getBoundingClientRect();
+  rowMenu.value = {
+    item,
+    left: Math.max(12, Math.min(window.innerWidth - 218, rect.right - 206)),
+    top: Math.max(12, Math.min(window.innerHeight - 252, rect.bottom + 6)),
+  };
+  if (event.detail === 0) nextTick(() => document.querySelector('.row-menu button')?.focus());
+}
+function onRowMenuKey(event) {
+  const buttons = [...event.currentTarget.querySelectorAll('button')];
+  const index = buttons.indexOf(document.activeElement);
+  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    event.preventDefault();
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? buttons.length - 1
+          : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length;
+    buttons[next]?.focus();
+  }
+  if (event.key === 'Escape') rowMenuTrigger?.focus();
+}
+function dismissRowMenu(event) {
+  if (!event.target.closest('.row-menu, .row-menu-toggle')) rowMenu.value = null;
 }
 function openItem(item) {
   if (item.kind === 'folder') {
@@ -354,6 +386,7 @@ function onPaste(event) {
 }
 function onKey(event) {
   if (event.key === 'Escape') {
+    rowMenu.value = null;
     if (!busy.value) {
       modal.value = null;
       preview.value = null;
@@ -436,6 +469,7 @@ const modalTitles = {
 
 onMounted(async () => {
   document.addEventListener('paste', onPaste);
+  document.addEventListener('pointerdown', dismissRowMenu);
   document.addEventListener('keydown', onKey);
   window.addEventListener('session-expired', expired);
   try {
@@ -449,6 +483,7 @@ onMounted(async () => {
 });
 onUnmounted(() => {
   document.removeEventListener('paste', onPaste);
+  document.removeEventListener('pointerdown', dismissRowMenu);
   document.removeEventListener('keydown', onKey);
   window.removeEventListener('session-expired', expired);
   disconnect();
@@ -465,15 +500,14 @@ onUnmounted(() => {
     <section class="login-story">
       <a class="brand" href="/"
         ><span class="brand-symbol"><i></i><i></i><i></i><i></i></span
-        ><span>同桌<span class="brand-en">OFFICE SHARE</span></span></a
+        ><span>同桌<span class="brand-en">Office Share</span></span></a
       >
       <div class="login-story-main">
-        <span class="eyebrow">A LITTLE CLOSER, WORK BETTER.</span>
-        <h1>同一张办公桌，<br />不止一个地方。</h1>
+        <h1>同桌，让工作接着走。</h1>
         <p>把文件、截图和文字放在一起。<br />无论在哪台电脑，团队的工作都能接着往下走。</p>
         <div class="desk-illustration">
           <div class="desk-note">
-            <span>TEAM WORKSPACE</span><AppIcon name="folder" :size="70" /><b
+            <span>团队的资料，在一处。</span><AppIcon name="folder" :size="70" /><b
               >好想法，在这里汇合。</b
             >
             <div class="desk-note-line"></div>
@@ -530,102 +564,98 @@ onUnmounted(() => {
     @dragover.prevent
     @drop="onDrop"
   >
-    <div v-if="mobileNav" class="sidebar-backdrop" @click="mobileNav = false"></div>
-    <aside class="sidebar" :class="{ expanded: mobileNav }">
-      <a class="brand" href="/" @click.prevent="navigate('all')"
-        ><span class="brand-symbol"><i></i><i></i><i></i><i></i></span
-        ><span>同桌<span class="brand-en">OFFICE SHARE</span></span></a
-      >
-      <button class="workspace-switch" @click="showMembers">
-        <span class="workspace-avatar">T</span
-        ><span
-          ><strong>团队工作空间</strong
-          ><small>{{ overview.members }} 位成员 · 共享协作</small></span
-        ><AppIcon name="down" :size="15" />
-      </button>
-      <div class="nav-caption">工作空间</div>
-      <nav class="main-nav" aria-label="工作空间导航">
+    <header class="app-header">
+      <div class="header-inner">
+        <a class="brand" href="/" @click.prevent="navigate('all')">
+          <span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <span>同桌</span>
+        </a>
+        <nav class="desktop-nav" aria-label="工作空间导航">
+          <button
+            v-for="entry in nav"
+            :key="entry.id"
+            :class="{ active: view === entry.id }"
+            :aria-current="view === entry.id ? 'page' : undefined"
+            @click="navigate(entry.id)"
+          >
+            {{ entry.label }}
+          </button>
+        </nav>
+        <div class="header-utilities">
+          <button class="header-members" @click="showMembers">
+            <AppIcon name="users" :size="17" />团队成员
+          </button>
+          <button class="icon-button" aria-label="使用帮助" @click="modal = 'help'">
+            <AppIcon name="info" :size="19" />
+          </button>
+          <button class="avatar small" aria-label="个人设置" @click="modal = 'settings'">
+            {{ user.name.slice(0, 1) }}
+          </button>
+          <button
+            class="icon-button mobile-menu"
+            :aria-expanded="mobileNav"
+            aria-label="打开导航"
+            @click="mobileNav = !mobileNav"
+          >
+            <AppIcon :name="mobileNav ? 'close' : 'list'" :size="22" />
+          </button>
+        </div>
+      </div>
+    </header>
+    <div v-if="mobileNav" class="mobile-navigation">
+      <nav aria-label="移动端工作空间导航">
         <button
           v-for="entry in nav"
           :key="entry.id"
           :class="{ active: view === entry.id }"
           @click="navigate(entry.id)"
         >
-          <AppIcon :name="entry.icon" :size="20" /><span>{{ entry.label }}</span
-          ><span v-if="entry.id === 'all'" class="nav-count">{{ activeItems.length }}</span>
+          <AppIcon :name="entry.icon" :size="18" />{{ entry.label
+          }}<AppIcon name="right" :size="14" />
+        </button>
+        <button
+          @click="
+            showMembers();
+            mobileNav = false;
+          "
+        >
+          <AppIcon name="users" :size="18" />团队成员<AppIcon name="right" :size="14" />
+        </button>
+        <button
+          @click="
+            modal = 'settings';
+            mobileNav = false;
+          "
+        >
+          <AppIcon name="settings" :size="18" />个人设置<AppIcon name="right" :size="14" />
         </button>
       </nav>
-      <div class="sidebar-separator"></div>
-      <div class="nav-caption">团队管理</div>
-      <nav class="main-nav">
-        <button @click="showMembers"><AppIcon name="users" /><span>团队成员</span></button
-        ><button @click="modal = 'settings'">
-          <AppIcon name="settings" /><span>个人设置</span>
-        </button>
-      </nav>
-      <div class="sidebar-bottom">
-        <div class="storage">
-          <div class="storage-title">
-            <AppIcon name="cloud" :size="18" /><span>共享存储空间</span
-            ><small>{{ Math.round((overview.used / overview.quota) * 100) }}%</small>
-          </div>
-          <div class="storage-track"><i :style="{ width: `${storagePercent}%` }"></i></div>
-          <p>
-            <strong>{{ sizeLabel(overview.used) }}</strong> / {{ sizeLabel(overview.quota) }}
-          </p>
-        </div>
-        <button class="help-button" @click="modal = 'help'">
-          <AppIcon name="info" :size="18" />使用帮助<AppIcon name="external" :size="15" /></button
-        ><button class="user-card" @click="modal = 'settings'">
-          <span class="avatar">{{ user.name.slice(0, 1) }}</span
-          ><span
-            ><strong>{{ user.name }}</strong
-            ><small>{{ user.role === 'admin' ? '空间管理员' : '团队成员' }}</small></span
-          ><AppIcon name="more" />
-        </button>
-      </div>
-    </aside>
+    </div>
     <div class="workspace-main">
-      <header class="topbar">
-        <button class="icon-button mobile-menu" aria-label="打开导航" @click="mobileNav = true">
-          <AppIcon name="list" />
+      <div class="workspace-context">
+        <button @click="showMembers">
+          <AppIcon name="users" :size="16" />团队工作空间<AppIcon name="down" :size="12" />
         </button>
-        <div class="topbar-location">
-          <AppIcon name="folder" :size="18" /><span>工作空间</span
-          ><AppIcon name="right" :size="13" /><strong>团队共享</strong>
+        <span class="connection" :class="{ reconnecting: connection !== 'online' }"
+          ><i></i>{{ connectionLabel }}</span
+        >
+      </div>
+      <div class="page-heading">
+        <div>
+          <h1>{{ title }}</h1>
+          <p>{{ subtitle }}</p>
         </div>
-        <div class="global-search">
-          <AppIcon name="search" :size="18" /><input
-            ref="searchInput"
-            v-model="query"
-            aria-label="搜索文件、图片或文字"
-            placeholder="搜索文件、图片或文字…"
-          /><kbd>{{ modifier }} K</kbd>
-        </div>
-        <div class="topbar-right">
-          <span class="connection" :class="{ reconnecting: connection !== 'online' }"
-            ><i></i>{{ connectionLabel }}</span
-          ><button class="avatar small" aria-label="个人设置" @click="modal = 'settings'">
-            {{ user.name.slice(0, 1) }}
+        <div class="heading-actions">
+          <button class="button secondary" @click="openModal('text')">
+            <AppIcon name="text" :size="18" />分享文字
+          </button>
+          <button class="button primary" @click="fileInput.click()">
+            <AppIcon name="upload" :size="18" />上传文件
           </button>
         </div>
-      </header>
+      </div>
       <div class="content-wrap">
         <main class="main-content">
-          <div class="page-heading">
-            <div>
-              <div class="section-kicker">YOUR SHARED DESK</div>
-              <h1>{{ title }}<span class="title-dot"></span></h1>
-              <p>{{ subtitle }}</p>
-            </div>
-            <div class="heading-actions">
-              <button class="button secondary" @click="openModal('text')">
-                <AppIcon name="text" :size="18" />分享文字</button
-              ><button class="button primary" @click="fileInput.click()">
-                <AppIcon name="plus" :size="18" />上传文件
-              </button>
-            </div>
-          </div>
           <input
             ref="fileInput"
             class="visually-hidden"
@@ -645,11 +675,11 @@ onUnmounted(() => {
             class="upload-zone"
             @click.self="fileInput.click()"
           >
-            <div class="upload-zone-icon"><AppIcon name="upload" :size="25" /></div>
+            <AppIcon name="upload" :size="22" />
             <div class="upload-zone-text">
-              <h2>把文件拖到这里，让协作开始</h2>
+              <h2>拖入文件，或直接粘贴</h2>
               <p>
-                支持文件、图片，单个文件最大 90 MB<span class="text-separator">|</span>或<button
+                原文件上传 · 每个文件最大 90 MB<span class="text-separator">|</span>或<button
                   class="text-button"
                   @click="fileInput.click()"
                 >
@@ -662,7 +692,7 @@ onUnmounted(() => {
                 <kbd>{{ modifier }}</kbd
                 ><span>+</span><kbd>V</kbd>
               </div>
-              <span>随手粘贴图片或文字</span>
+              <span>粘贴截图或文字</span>
             </div>
           </section>
           <section
@@ -677,13 +707,12 @@ onUnmounted(() => {
             </div>
             <div class="folder-grid">
               <button
-                v-for="(folder, index) in folders"
+                v-for="folder in folders"
                 :key="folder.id"
                 class="folder-card"
                 @click="enterFolder(folder.id)"
               >
-                <span class="folder-glyph" :class="`tone-${index % 3}`"
-                  ><AppIcon name="folder" :size="29" /></span
+                <span class="folder-glyph"><AppIcon name="folder" :size="22" /></span
                 ><span
                   ><strong>{{ folder.name }}</strong
                   ><small
@@ -739,20 +768,32 @@ onUnmounted(() => {
                 </div>
               </div>
             </div>
-            <div class="file-tabs" role="tablist" aria-label="内容类型">
-              <button
-                v-for="entry in tabs"
-                :key="entry.id"
-                role="tab"
-                :aria-selected="tab === entry.id"
-                :class="{ active: tab === entry.id }"
-                @click="
-                  tab = entry.id;
-                  selection = [];
-                "
-              >
-                {{ entry.label }}<span>{{ entry.count }}</span>
-              </button>
+            <div class="list-toolbar">
+              <div class="file-tabs" role="tablist" aria-label="内容类型">
+                <button
+                  v-for="entry in tabs"
+                  :key="entry.id"
+                  role="tab"
+                  :aria-selected="tab === entry.id"
+                  :class="{ active: tab === entry.id }"
+                  @click="
+                    tab = entry.id;
+                    selection = [];
+                  "
+                >
+                  {{ entry.label }}<span>{{ entry.count }}</span>
+                </button>
+              </div>
+              <div class="global-search">
+                <AppIcon name="search" :size="17" />
+                <input
+                  ref="searchInput"
+                  v-model="query"
+                  aria-label="搜索文件、图片或文字"
+                  placeholder="搜索共享内容"
+                />
+                <kbd>{{ modifier }} K</kbd>
+              </div>
             </div>
             <div v-if="selection.length" class="selection-bar">
               <span>已选择 {{ selection.length }} 项</span
@@ -842,12 +883,24 @@ onUnmounted(() => {
                       />
                     </td>
                     <td>
-                      <button class="file-name-button" @click="openItem(item)">
-                        <FileMark :item="item" /><span
+                      <button class="file-name-button" :title="item.name" @click="openItem(item)">
+                        <img
+                          v-if="item.kind === 'image'"
+                          class="file-thumbnail"
+                          :src="`/api/files/${item.id}?preview=1`"
+                          alt=""
+                          loading="lazy"
+                        />
+                        <FileMark v-else :item="item" /><span
                           ><strong>{{ item.name }}</strong
                           ><small v-if="item.kind === 'text'">{{ item.content.slice(0, 50) }}</small
-                          ><small v-else>{{ fileType(item) }}</small></span
-                        >
+                          ><small v-else>{{ fileType(item) }}</small>
+                          <span class="mobile-file-meta"
+                            >{{ fileType(item) }} · {{ item.owner }} ·
+                            {{ dateLabel(item.created) }} ·
+                            {{ item.kind === 'folder' ? '文件夹' : sizeLabel(item.size) }}</span
+                          >
+                        </span>
                       </button>
                     </td>
                     <td class="owner-column">
@@ -890,6 +943,14 @@ onUnmounted(() => {
                           >
                             <AppIcon name="copy" :size="17" /></button
                           ><button
+                            class="icon-button row-menu-toggle"
+                            :aria-label="`更多操作 ${item.name}`"
+                            aria-haspopup="menu"
+                            :aria-expanded="rowMenu?.item.id === item.id"
+                            @click="showRowMenu(item, $event)"
+                          >
+                            <AppIcon name="more" :size="19" /></button
+                          ><button
                             class="icon-button optional-action"
                             :aria-label="`重命名 ${item.name}`"
                             title="重命名"
@@ -918,7 +979,12 @@ onUnmounted(() => {
             </div>
             <div v-else class="items-grid">
               <article v-for="item in filtered" :key="item.id" class="item-card">
-                <button class="item-card-preview" :class="item.kind" @click="openItem(item)">
+                <button
+                  class="item-card-preview"
+                  :class="item.kind"
+                  :aria-label="`打开 ${item.name}`"
+                  @click="openItem(item)"
+                >
                   <img
                     v-if="item.kind === 'image'"
                     :src="`/api/files/${item.id}?preview=1`"
@@ -943,6 +1009,16 @@ onUnmounted(() => {
                   ><button v-else class="icon-button" aria-label="恢复" @click="restore(item)">
                     <AppIcon name="restore" />
                   </button>
+                  <button
+                    v-if="view !== 'trash'"
+                    class="icon-button row-menu-toggle"
+                    :aria-label="`更多操作 ${item.name}`"
+                    aria-haspopup="menu"
+                    :aria-expanded="rowMenu?.item.id === item.id"
+                    @click="showRowMenu(item, $event)"
+                  >
+                    <AppIcon name="more" :size="18" />
+                  </button>
                 </div>
               </article>
             </div>
@@ -952,12 +1028,50 @@ onUnmounted(() => {
             </div>
           </section>
           <footer class="workspace-footer">
-            <span>少一点来回传，多一点一起做。</span><span>同桌 OFFICE SHARE</span>
+            <span>同桌 · 团队的资料，在一处。</span
+            ><button @click="modal = 'help'">使用帮助<AppIcon name="external" :size="13" /></button>
           </footer>
         </main>
         <aside class="right-panel">
+          <section class="space-overview">
+            <div class="section-title">
+              <h2>在这张桌上</h2>
+              <AppIcon name="squares" :size="17" />
+            </div>
+            <p class="space-overview-description">每一份分享，所有成员都能看见。</p>
+            <dl class="space-counts">
+              <div>
+                <dt>文件</dt>
+                <dd>{{ sharedCounts.files }}</dd>
+              </div>
+              <div>
+                <dt>图片</dt>
+                <dd>{{ sharedCounts.images }}</dd>
+              </div>
+              <div>
+                <dt>文字</dt>
+                <dd>{{ sharedCounts.texts }}</dd>
+              </div>
+            </dl>
+            <div class="storage">
+              <div class="storage-title">
+                <span>空间用量</span
+                ><span>{{ sizeLabel(overview.used) }} / {{ sizeLabel(overview.quota) }}</span>
+              </div>
+              <div
+                class="storage-track"
+                role="progressbar"
+                :aria-valuenow="storagePercent"
+                :aria-valuemin="0"
+                :aria-valuemax="100"
+                aria-label="共享存储使用比例"
+              >
+                <i :style="{ width: `${storagePercent}%` }"></i>
+              </div>
+            </div>
+          </section>
           <div class="online-heading">
-            <h2>一起在线</h2>
+            <h2>团队协作</h2>
             <span class="online-count"><i></i>{{ overview.online }} 人</span>
           </div>
           <div class="online-summary">
@@ -999,18 +1113,11 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="right-divider"></div>
-          <section class="quick-guide">
-            <span class="section-kicker">WORK A LITTLE SMARTER</span>
-            <h2>分享，可以很简单。</h2>
-            <div v-for="entry in guide" :key="entry.label" class="guide-row">
-              <span><AppIcon :name="entry.icon" :size="19" /></span>
-              <div>
-                <h3>{{ entry.label }}</h3>
-                <p>{{ entry.description }}</p>
-              </div>
-            </div>
+          <section class="desk-shortcuts">
+            <h2>少一点来回传。</h2>
+            <p>截图后粘贴，灵感随手分享。<br />点开文档，直接查看正文。</p>
             <button class="text-button" @click="modal = 'help'">
-              了解使用方式<AppIcon name="arrow" :size="15" />
+              查看快捷操作<AppIcon name="arrow" :size="15" />
             </button>
           </section>
           <div class="right-bottom">
@@ -1099,6 +1206,62 @@ onUnmounted(() => {
   </div>
 
   <div
+    v-if="rowMenu"
+    class="row-menu"
+    :style="{ left: `${rowMenu.left}px`, top: `${rowMenu.top}px` }"
+    role="menu"
+    aria-label="文件更多操作"
+    @keydown="onRowMenuKey"
+  >
+    <button
+      role="menuitem"
+      @click="
+        openItem(rowMenu.item);
+        rowMenu = null;
+      "
+    >
+      <AppIcon name="external" :size="17" />打开内容
+    </button>
+    <button
+      role="menuitem"
+      @click="
+        toggleStar(rowMenu.item);
+        rowMenu = null;
+      "
+    >
+      <AppIcon name="star" :size="17" />{{ rowMenu.item.starred ? '取消收藏' : '添加收藏' }}
+    </button>
+    <button
+      role="menuitem"
+      @click="
+        copyLink(rowMenu.item);
+        rowMenu = null;
+      "
+    >
+      <AppIcon name="link" :size="17" />复制链接
+    </button>
+    <button
+      role="menuitem"
+      @click="
+        openModal('rename', rowMenu.item);
+        rowMenu = null;
+      "
+    >
+      <AppIcon name="edit" :size="17" />重命名
+    </button>
+    <button
+      role="menuitem"
+      class="danger-menuitem"
+      @click="
+        openModal('trash', rowMenu.item);
+        rowMenu = null;
+      "
+    >
+      <AppIcon name="trash" :size="17" />移入回收站
+    </button>
+  </div>
+
+  <div
     v-if="modal || preview"
     class="modal-backdrop"
     @click.self="!busy && ((modal = null), (preview = null))"
@@ -1112,7 +1275,6 @@ onUnmounted(() => {
     >
       <header class="dialog-heading">
         <div>
-          <span class="section-kicker">OFFICE SHARE</span>
           <h2>{{ modal ? modalTitles[modal] : preview.name }}</h2>
         </div>
         <button

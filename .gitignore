@@ -19,3 +19,6 @@ coverage.out
 *.sqlite*
 *credentials*
 .DS_Store
+
+# Private design QA captures
+.taste-skill/
