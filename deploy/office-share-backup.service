@@ -1,0 +1,6 @@
+[Unit]
+Description=Consistent Office Share SQLite and file backup
+[Service]
+Type=oneshot
+ExecStart=/opt/office-share/current/deploy/backup.sh
+UMask=0077

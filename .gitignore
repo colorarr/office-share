@@ -1,0 +1,21 @@
+# Dependencies and build output
+web/node_modules/
+web/dist/
+/bin/
+*.tar.gz
+*.test
+coverage.out
+
+# Runtime data and credentials
+/data/
+/backups/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.db
+*.db-*
+*.sqlite*
+*credentials*
+.DS_Store

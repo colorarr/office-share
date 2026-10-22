@@ -1,0 +1,20 @@
+{
+  "name": "office-share-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "format": "prettier --write src index.html vite.config.js package.json"
+  },
+  "dependencies": {
+    "vue": "^3.5.0",
+    "@phosphor-icons/vue": "^2.2.0"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "prettier": "^3.6.0"
+  }
+}

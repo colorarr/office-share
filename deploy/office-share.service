@@ -1,0 +1,27 @@
+[Unit]
+Description=Office Share - Tongzhuo workspace
+After=network.target
+
+[Service]
+Type=simple
+User=office-share
+Group=office-share
+WorkingDirectory=/opt/office-share/current
+EnvironmentFile=/etc/office-share.env
+ExecStart=/opt/office-share/current/office-share
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/office-share
+UMask=0077
+LimitNOFILE=16384
+MemoryMax=768M
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target
