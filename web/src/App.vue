@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import AppIcon from './components/AppIcon.vue';
 import FileMark from './components/FileMark.vue';
+import DocumentPreview from './components/DocumentPreview.vue';
 import { api } from './api/client';
 import { useWorkspace } from './composables/useWorkspace';
 import { sizeLabel, dateLabel, fileType } from './utils/format';
@@ -1292,11 +1293,7 @@ onUnmounted(() => {
         <pre v-else-if="preview.kind === 'text'" class="text-preview" tabindex="0">{{
           preview.content
         }}</pre>
-        <div v-else class="file-preview">
-          <FileMark :item="preview" large />
-          <h3>{{ preview.name }}</h3>
-          <p>下载到电脑后，使用对应的应用打开。</p>
-        </div>
+        <DocumentPreview v-else :item="preview" @copy="copy" />
         <div class="preview-actions">
           <button class="button secondary" @click="copyLink(preview)">
             <AppIcon name="link" :size="17" />复制链接</button

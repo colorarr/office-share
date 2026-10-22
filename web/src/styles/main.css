@@ -2373,3 +2373,54 @@ tr:focus-within .optional-action {
   font-size: 10px;
   line-height: 1.8;
 }
+
+.document-preview {
+  border: 1px solid #e3e7ee;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+.document-preview-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 17px;
+  border-bottom: 1px solid #eaecef;
+  background: #fafbfc;
+  color: #8490a2;
+  font-size: 11px;
+}
+.document-preview-content {
+  margin: 0;
+  padding: 23px;
+  max-height: 52vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+  font:
+    13px/1.95 'SF Mono',
+    Consolas,
+    'PingFang SC',
+    'Microsoft YaHei',
+    monospace;
+  color: #455166;
+}
+.document-preview-notice {
+  padding: 10px 17px;
+  background: #fff9ed;
+  color: #9a8157;
+  font-size: 11px;
+  line-height: 1.8;
+}
+.document-preview-error,
+.document-preview-empty {
+  padding: 40px 22px;
+  text-align: center;
+  color: #8995a8;
+  font-size: 12px;
+}
+.document-preview-error p {
+  margin: 13px 0;
+}
