@@ -1038,7 +1038,7 @@ onUnmounted(() => {
               <h2>在这张桌上</h2>
               <AppIcon name="squares" :size="17" />
             </div>
-            <p class="space-overview-description">每一份分享，所有成员都能看见。</p>
+            <p class="space-overview-description">全空间统计，包含所有文件夹。</p>
             <dl class="space-counts">
               <div>
                 <dt>文件</dt>
@@ -1072,7 +1072,7 @@ onUnmounted(() => {
           </section>
           <div class="online-heading">
             <h2>团队协作</h2>
-            <span class="online-count"><i></i>{{ overview.online }} 人</span>
+            <span class="online-count"><i></i>{{ overview.online }} 人在线</span>
           </div>
           <div class="online-summary">
             <span class="avatar">{{ user.name.slice(0, 1) }}</span>
