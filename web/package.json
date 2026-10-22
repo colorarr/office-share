@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "format": "prettier --write src index.html vite.config.js package.json"
+    "format": "prettier --write src index.html vite.config.js package.json",
+    "test": "node --test src/utils/*.test.js src/composables/*.test.js src/api/*.test.js"
   },
   "dependencies": {
     "vue": "^3.5.0",

@@ -1,7 +1,10 @@
 import { computed, ref } from 'vue';
-import { api, uploadFile } from '../api/client';
+import { api, uploadFile } from '../api/client.js';
 
-export function useWorkspace(notify) {
+export function useWorkspace(
+  notify,
+  { client = api, sendFile = uploadFile, createEventSource = (url) => new EventSource(url) } = {},
+) {
   const user = ref(null);
   const items = ref([]);
   const overview = ref({ used: 0, quota: 10 * 1024 ** 3, online: 0, members: 0, activity: [] });
@@ -14,11 +17,12 @@ export function useWorkspace(notify) {
   let running = 0;
   let generation = 0;
   const pending = [];
+  const controllers = new Map();
 
   async function refresh() {
     const currentGeneration = generation;
     try {
-      const [files, stats] = await Promise.all([api.items(), api.overview()]);
+      const [files, stats] = await Promise.all([client.items(), client.overview()]);
       if (currentGeneration !== generation || !user.value) return;
       items.value = files;
       overview.value = stats;
@@ -34,7 +38,7 @@ export function useWorkspace(notify) {
     await refresh();
     loading.value = false;
     events?.close();
-    events = new EventSource('/api/events');
+    events = createEventSource('/api/events');
     events.onopen = () => (connection.value = 'online');
     events.onerror = () => (connection.value = 'reconnecting');
     events.addEventListener('change', () => {
@@ -50,27 +54,63 @@ export function useWorkspace(notify) {
     user.value = null;
     items.value = [];
     pending.splice(0);
+    for (const controller of controllers.values()) controller.abort();
+    controllers.clear();
     transfers.value = [];
   }
 
-  async function process() {
-    if (running >= 3 || !pending.length) return;
-    const task = pending.shift();
+  function processQueue() {
+    while (running < 3 && pending.length) {
+      const task = pending.shift();
+      void runTask(task);
+    }
+  }
+
+  async function runTask(task) {
+    const taskGeneration = generation;
+    const controller = new AbortController();
+    controllers.set(task.id, controller);
     running++;
     task.status = 'uploading';
+    task.attempts++;
     try {
-      await uploadFile(task.file, task.parent, (value) => (task.progress = value));
+      await sendFile(task.file, task.parent, (value) => (task.progress = value), {
+        signal: controller.signal,
+      });
+      if (taskGeneration !== generation) return;
       task.status = 'done';
       task.progress = 100;
       await refresh();
     } catch (error) {
+      if (taskGeneration !== generation) return;
       task.status = 'error';
       task.error = error.message;
       notify(`${task.name}：${error.message}`, 'error');
     } finally {
+      controllers.delete(task.id);
       running--;
-      process();
+      processQueue();
     }
+  }
+
+  function retryUpload(task) {
+    if (!user.value || !transfers.value.includes(task) || task.status !== 'error') return false;
+    task.error = '';
+    task.progress = 0;
+    task.status = 'waiting';
+    pending.push(task);
+    processQueue();
+    return true;
+  }
+
+  function retryFailed() {
+    for (const task of transfers.value.filter((entry) => entry.status === 'error')) {
+      retryUpload(task);
+    }
+  }
+
+  function clearCompleted() {
+    transfers.value = transfers.value.filter((task) => task.status !== 'done');
   }
 
   function upload(files, parent = '') {
@@ -86,16 +126,20 @@ export function useWorkspace(notify) {
         name: file.name,
         progress: 0,
         status: 'waiting',
+        error: '',
+        attempts: 0,
       }).value;
       transfers.value.push(task);
       pending.push(task);
     }
-    for (let index = 0; index < 3; index++) process();
+    processQueue();
   }
 
   const activeTransfers = computed(() =>
     transfers.value.filter((task) => ['waiting', 'uploading'].includes(task.status)),
   );
+
+  const failedTransfers = computed(() => transfers.value.filter((task) => task.status === 'error'));
 
   return {
     user,
@@ -106,9 +150,13 @@ export function useWorkspace(notify) {
     loading,
     loadError,
     activeTransfers,
+    failedTransfers,
     refresh,
     connect,
     disconnect,
     upload,
+    retryUpload,
+    retryFailed,
+    clearCompleted,
   };
 }

@@ -5,6 +5,7 @@ import FileMark from './components/FileMark.vue';
 import { api } from './api/client';
 import { useWorkspace } from './composables/useWorkspace';
 import { sizeLabel, dateLabel, fileType } from './utils/format';
+import { nameClipboardFiles } from './utils/clipboard-files';
 
 const toast = ref(null);
 let toastTimer;
@@ -23,6 +24,10 @@ const {
   loading,
   loadError,
   activeTransfers,
+  failedTransfers,
+  retryUpload,
+  retryFailed,
+  clearCompleted,
   refresh,
   connect,
   disconnect,
@@ -335,7 +340,7 @@ function onPaste(event) {
   const files = event.clipboardData?.files;
   if (files?.length) {
     event.preventDefault();
-    acceptFiles(files);
+    acceptFiles(nameClipboardFiles(files));
     return;
   }
   const text = event.clipboardData?.getData('text/plain');
@@ -1020,45 +1025,74 @@ onUnmounted(() => {
         <p>文件将上传到「{{ parent ? title : '团队共享' }}」</p>
       </div>
     </div>
-    <section v-if="transfers.length" class="transfer-panel" :class="{ collapsed: !transferOpen }">
+    <section
+      v-if="transfers.length"
+      class="transfer-panel"
+      :class="{ collapsed: !transferOpen }"
+      aria-label="文件上传队列"
+    >
       <button class="transfer-heading" @click="transferOpen = !transferOpen">
-        <AppIcon :name="activeTransfers.length ? 'upload' : 'success'" :size="19" /><strong>{{
-          activeTransfers.length
-            ? `${activeTransfers.length} 个文件正在传输`
-            : `已完成 ${completedCount} 个文件上传`
-        }}</strong
-        ><AppIcon name="down" :size="16" />
+        <AppIcon
+          :name="activeTransfers.length ? 'upload' : failedTransfers.length ? 'warning' : 'success'"
+          :size="19"
+        />
+        <strong>
+          {{
+            activeTransfers.length
+              ? `${activeTransfers.length} 个文件正在传输`
+              : failedTransfers.length
+                ? `${failedTransfers.length} 个文件上传失败`
+                : `已完成 ${completedCount} 个文件上传`
+          }}
+        </strong>
+        <span v-if="activeTransfers.length && failedTransfers.length" class="transfer-failed-count">
+          {{ failedTransfers.length }} 项失败
+        </span>
+        <AppIcon name="down" :size="16" />
       </button>
       <div v-if="transferOpen" class="transfer-list">
         <div v-for="task in transfers" :key="task.id" class="transfer-item">
-          <div>
-            <span>{{ task.name }}</span
-            ><small :class="task.status">{{
-              task.status === 'done'
-                ? '已完成'
-                : task.status === 'error'
-                  ? task.error
-                  : task.status === 'waiting'
-                    ? '等待上传'
-                    : task.progress === 100
-                      ? '正在保存…'
-                      : `${task.progress}%`
-            }}</small>
+          <div class="transfer-item-heading">
+            <span :title="task.name">{{ task.name }}</span>
+            <small :class="task.status">
+              {{
+                task.status === 'done'
+                  ? '已完成'
+                  : task.status === 'error'
+                    ? '上传失败'
+                    : task.status === 'waiting'
+                      ? '等待上传'
+                      : task.progress === 100
+                        ? '正在保存…'
+                        : `${task.progress}%`
+              }}
+            </small>
+            <button
+              v-if="task.status === 'error'"
+              class="transfer-retry"
+              :aria-label="`重试上传 ${task.name}`"
+              @click="retryUpload(task)"
+            >
+              <AppIcon name="restore" :size="14" />
+              重试
+            </button>
           </div>
+          <p v-if="task.status === 'error'" class="transfer-error">{{ task.error }}</p>
           <div class="transfer-track">
             <i :style="{ width: `${task.progress}%` }" :class="task.status"></i>
           </div>
         </div>
-        <button
-          v-if="!activeTransfers.length"
-          class="text-button quiet"
-          @click="
-            transfers = [];
-            transferOpen = false;
-          "
-        >
-          清除已完成记录
-        </button>
+        <div v-if="failedTransfers.length || completedCount" class="transfer-actions">
+          <button v-if="failedTransfers.length" class="text-button" @click="retryFailed">
+            <AppIcon name="restore" :size="14" />重试全部失败项
+          </button>
+          <button v-if="completedCount" class="text-button quiet" @click="clearCompleted">
+            清除已完成记录
+          </button>
+        </div>
+        <p v-if="failedTransfers.length" class="transfer-retry-hint">
+          文件保留在当前页面，重试会从头上传。刷新或离开页面后需重新选择。
+        </p>
       </div>
     </section>
   </div>
@@ -1140,8 +1174,8 @@ onUnmounted(() => {
           </p>
           <h3>传输说明</h3>
           <p>
-            当前版本采用流式上传，网络中断后请重新上传。支持 HTTP
-            范围下载；上传断点续传将在后续版本加入。
+            当前版本采用流式上传，失败后可在传输面板点击「重试」或「重试全部失败项」。重试会从头上传，刷新或离开页面后需重新选择文件。支持
+            HTTP 范围下载；上传断点续传将在后续版本加入。
           </p>
         </div></template
       >
