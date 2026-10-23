@@ -2320,6 +2320,7 @@ kbd {
   background: #f8f9fb;
   border-radius: var(--radius-control);
 }
+.text-note-view,
 .text-editor-form {
   display: flex;
   flex-direction: column;
@@ -2361,5 +2362,93 @@ kbd {
   }
   .editor-hint {
     font-size: 11px;
+  }
+}
+
+/* Motion is interaction feedback, not a new page entrance. Keep the canvas fixed. */
+.modal-enter-active {
+  transition: opacity 180ms ease-out;
+}
+.modal-leave-active {
+  transition: opacity 140ms ease-in;
+  pointer-events: none;
+}
+.modal-enter-active .dialog {
+  transition:
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 180ms ease-out;
+}
+.modal-leave-active .dialog {
+  transition:
+    transform 140ms ease-in,
+    opacity 140ms ease-in;
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+.modal-enter-from .dialog {
+  transform: translateY(8px) scale(0.985);
+  opacity: 0;
+}
+.modal-leave-to .dialog {
+  transform: translateY(4px) scale(0.99);
+  opacity: 0;
+}
+.note-mode-enter-active,
+.note-mode-leave-active {
+  transition:
+    opacity 90ms ease,
+    transform 90ms ease;
+}
+.note-mode-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.note-mode-leave-to {
+  opacity: 0;
+  transform: translateY(-3px);
+}
+.note-mode-leave-active {
+  pointer-events: none;
+}
+.popover-enter-active,
+.popover-leave-active,
+.feedback-enter-active,
+.feedback-leave-active {
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+.popover-enter-from,
+.popover-leave-to,
+.feedback-enter-from,
+.feedback-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.popover-leave-active,
+.feedback-leave-active {
+  pointer-events: none;
+}
+.button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal-enter-active,
+  .modal-leave-active,
+  .modal-enter-active .dialog,
+  .modal-leave-active .dialog,
+  .note-mode-enter-active,
+  .note-mode-leave-active,
+  .popover-enter-active,
+  .popover-leave-active,
+  .feedback-enter-active,
+  .feedback-leave-active {
+    transition: none !important;
+    transform: none !important;
+  }
+  .button:active:not(:disabled) {
+    transform: none;
   }
 }

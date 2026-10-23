@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import AppIcon from './components/AppIcon.vue';
 import FileMark from './components/FileMark.vue';
 import DocumentPreview from './components/DocumentPreview.vue';
+import TextNotePanel from './components/TextNotePanel.vue';
 import { api } from './api/client';
 import { useWorkspace } from './composables/useWorkspace';
 import { sizeLabel, dateLabel, fileType } from './utils/format';
@@ -56,6 +57,7 @@ const members = ref([]);
 const preview = ref(null);
 const rowMenu = ref(null);
 let rowMenuTrigger;
+let dialogTrigger;
 const mobileNav = ref(false);
 const transferOpen = ref(false);
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
@@ -228,6 +230,7 @@ function openItem(item) {
     enterFolder(item.id);
     return;
   }
+  dialogTrigger = document.activeElement;
   preview.value = item;
 }
 function openLinkedItem() {
@@ -236,6 +239,7 @@ function openLinkedItem() {
   if (item) openItem(item);
 }
 function openModal(type, item = null) {
+  if (!modal.value && !preview.value) dialogTrigger = document.activeElement;
   modal.value = type;
   formError.value = '';
   if (type === 'text') form.value = { name: '', content: '' };
@@ -245,7 +249,36 @@ function openModal(type, item = null) {
   else if (type === 'password') form.value = { old: '', new: '' };
   else if (type === 'trash') form.value = { ids: item ? [item.id] : [...selection.value] };
   else form.value = { name: '' };
-  nextTick(() => document.querySelector('.dialog input:not(:disabled), .dialog textarea')?.focus());
+  if (type !== 'edit') {
+    nextTick(() =>
+      document.querySelector('.dialog input:not(:disabled), .dialog textarea')?.focus(),
+    );
+  }
+}
+function closeDialog() {
+  if (busy.value) return;
+  modal.value = null;
+  preview.value = null;
+}
+function onDialogLeave(element) {
+  element.inert = true;
+}
+function onDialogEnter(element) {
+  element.inert = false;
+  const active = document.activeElement;
+  if (active && active !== document.body && !element.contains(active)) dialogTrigger = active;
+}
+function focusDialog(element) {
+  if (!element.contains(document.activeElement)) {
+    element
+      .querySelector('input:not(:disabled), textarea:not(:disabled), button:not(:disabled)')
+      ?.focus({ preventScroll: true });
+  }
+}
+function restoreDialogFocus() {
+  if (!modal.value && !preview.value && document.contains(dialogTrigger)) {
+    dialogTrigger.focus({ preventScroll: true });
+  }
 }
 async function saveModal() {
   if (busy.value) return;
@@ -275,11 +308,10 @@ async function saveModal() {
       selection.value = [];
       preview.value = null;
     }
+    // Clear both states together: a successful edit returns to the list, not to preview.
+    if (type === 'edit') preview.value = null;
     modal.value = type === 'invite' ? 'members' : null;
     if (user.value) await refresh();
-    if (type === 'edit') {
-      preview.value = items.value.find((item) => item.id === form.value.id) || preview.value;
-    }
     if (type !== 'password') notify(type === 'trash' ? '已移入回收站，可随时恢复' : '保存成功');
   } catch (error) {
     formError.value = error.message;
@@ -412,7 +444,7 @@ function onKey(event) {
       ...document.querySelectorAll(
         '.dialog button:not(:disabled), .dialog input, .dialog textarea, .dialog [tabindex="0"]',
       ),
-    ].filter((el) => el.offsetParent !== null);
+    ].filter((el) => el.offsetParent !== null && !el.disabled && !el.closest('[inert]'));
     const first = focusable[0];
     const last = focusable.at(-1);
     if (event.shiftKey && document.activeElement === first) {
@@ -1202,310 +1234,299 @@ onUnmounted(() => {
     </section>
   </div>
 
-  <div
-    v-if="rowMenu"
-    class="row-menu"
-    :style="{ left: `${rowMenu.left}px`, top: `${rowMenu.top}px` }"
-    role="menu"
-    aria-label="文件更多操作"
-    @keydown="onRowMenuKey"
-  >
-    <button
-      role="menuitem"
-      @click="
-        openItem(rowMenu.item);
-        rowMenu = null;
-      "
+  <Transition name="popover">
+    <div
+      v-if="rowMenu"
+      class="row-menu"
+      :style="{ left: `${rowMenu.left}px`, top: `${rowMenu.top}px` }"
+      role="menu"
+      aria-label="文件更多操作"
+      @keydown="onRowMenuKey"
     >
-      <AppIcon name="external" :size="17" />打开内容
-    </button>
-    <button
-      role="menuitem"
-      @click="
-        toggleStar(rowMenu.item);
-        rowMenu = null;
-      "
-    >
-      <AppIcon name="star" :size="17" />{{ rowMenu.item.starred ? '取消收藏' : '添加收藏' }}
-    </button>
-    <button
-      role="menuitem"
-      @click="
-        copyLink(rowMenu.item);
-        rowMenu = null;
-      "
-    >
-      <AppIcon name="link" :size="17" />复制链接
-    </button>
-    <button
-      role="menuitem"
-      @click="
-        openModal('rename', rowMenu.item);
-        rowMenu = null;
-      "
-    >
-      <AppIcon name="edit" :size="17" />重命名
-    </button>
-    <button
-      role="menuitem"
-      class="danger-menuitem"
-      @click="
-        openModal('trash', rowMenu.item);
-        rowMenu = null;
-      "
-    >
-      <AppIcon name="trash" :size="17" />移入回收站
-    </button>
-  </div>
+      <button
+        role="menuitem"
+        @click="
+          openItem(rowMenu.item);
+          rowMenu = null;
+        "
+      >
+        <AppIcon name="external" :size="17" />打开内容
+      </button>
+      <button
+        role="menuitem"
+        @click="
+          toggleStar(rowMenu.item);
+          rowMenu = null;
+        "
+      >
+        <AppIcon name="star" :size="17" />{{ rowMenu.item.starred ? '取消收藏' : '添加收藏' }}
+      </button>
+      <button
+        role="menuitem"
+        @click="
+          copyLink(rowMenu.item);
+          rowMenu = null;
+        "
+      >
+        <AppIcon name="link" :size="17" />复制链接
+      </button>
+      <button
+        role="menuitem"
+        @click="
+          openModal('rename', rowMenu.item);
+          rowMenu = null;
+        "
+      >
+        <AppIcon name="edit" :size="17" />重命名
+      </button>
+      <button
+        role="menuitem"
+        class="danger-menuitem"
+        @click="
+          openModal('trash', rowMenu.item);
+          rowMenu = null;
+        "
+      >
+        <AppIcon name="trash" :size="17" />移入回收站
+      </button>
+    </div>
+  </Transition>
 
-  <div
-    v-if="modal || preview"
-    class="modal-backdrop"
-    @click.self="!busy && ((modal = null), (preview = null))"
+  <Transition
+    name="modal"
+    @before-enter="onDialogEnter"
+    @after-enter="focusDialog"
+    @leave-cancelled="onDialogEnter"
+    @before-leave="onDialogLeave"
+    @after-leave="restoreDialogFocus"
   >
-    <section
-      class="dialog"
-      :class="{
-        'preview-dialog': preview && !modal,
-        'text-dialog': (preview?.kind === 'text' && !modal) || modal === 'edit',
-        'members-dialog': modal === 'members',
-      }"
-      role="dialog"
-      aria-modal="true"
-      :aria-label="modal ? modalTitles[modal] : preview.name"
-    >
-      <header class="dialog-heading">
-        <div>
-          <h2>{{ modal === 'edit' ? form.name : modal ? modalTitles[modal] : preview.name }}</h2>
-        </div>
-        <button
-          class="icon-button"
-          aria-label="关闭弹窗"
-          :disabled="busy"
-          @click="modal ? (modal = null) : (preview = null)"
-        >
-          <AppIcon name="close" :size="22" />
-        </button>
-      </header>
-      <div v-if="modal === 'edit' && preview" class="preview-meta">
-        <span class="avatar tiny">{{ preview.owner.slice(0, 1) }}</span>
-        {{ preview.owner }}<span>·</span>{{ dateLabel(itemUpdatedAt(preview)) }}<span>·</span>
-        {{ sizeLabel(preview.size) }}
-      </div>
-      <template v-if="modal === 'members'"
-        ><p class="dialog-description">这个空间里的文件和文字，对所有团队成员可见。</p>
-        <div class="member-list">
-          <div v-for="member in members" :key="member.id" class="member-row">
-            <span class="avatar">{{ member.name.slice(0, 1) }}</span>
-            <div>
-              <strong>{{ member.name }}</strong
-              ><small>{{ member.username }}</small>
-            </div>
-            <span class="member-role">{{ member.role === 'admin' ? '管理员' : '成员' }}</span>
-          </div>
-        </div>
-        <button v-if="user.role === 'admin'" class="button primary" @click="openModal('invite')">
-          <AppIcon name="plus" :size="17" />添加团队成员
-        </button></template
+    <div v-if="modal || preview" class="modal-backdrop" @click.self="closeDialog">
+      <section
+        class="dialog"
+        :class="{
+          'preview-dialog': preview && !modal,
+          'text-dialog': (preview?.kind === 'text' && !modal) || modal === 'edit',
+          'members-dialog': modal === 'members',
+        }"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="modal ? modalTitles[modal] : preview.name"
       >
-      <template v-else-if="modal === 'settings'"
-        ><div class="settings-profile">
-          <span class="avatar">{{ user.name.slice(0, 1) }}</span>
+        <header class="dialog-heading">
           <div>
-            <strong>{{ user.name }}</strong>
-            <p>{{ user.username }} · {{ user.role === 'admin' ? '空间管理员' : '团队成员' }}</p>
+            <h2>{{ modal === 'edit' ? form.name : modal ? modalTitles[modal] : preview.name }}</h2>
           </div>
+          <button class="icon-button" aria-label="关闭弹窗" :disabled="busy" @click="closeDialog">
+            <AppIcon name="close" :size="22" />
+          </button>
+        </header>
+        <div v-if="preview?.kind === 'text' && (!modal || modal === 'edit')" class="preview-meta">
+          <span class="avatar tiny">{{ preview.owner.slice(0, 1) }}</span>
+          {{ preview.owner }}<span>·</span>{{ dateLabel(itemUpdatedAt(preview)) }}<span>·</span>
+          {{ sizeLabel(preview.size) }}
         </div>
-        <button class="settings-row" @click="openModal('password')">
-          <AppIcon name="lock" />修改登录密码<AppIcon name="right" :size="16" /></button
-        ><button class="settings-row logout-row" @click="logout">
-          <AppIcon name="logout" />退出登录<AppIcon name="right" :size="16" /></button
-      ></template>
-      <template v-else-if="modal === 'help'"
-        ><div class="help-content">
-          <h3>文件与图片</h3>
-          <p>
-            将文件拖入工作空间，或点击「上传文件」。支持同时上传多个文件，单个文件上限为 90
-            MB。上传队列会显示真实进度。
-          </p>
-          <h3>快捷键与剪贴板</h3>
-          <p>
-            Windows 使用 Ctrl，Mac 使用 ⌘。在页面空白处按 {{ modifier }} + V
-            可粘贴截图或文字；文字便签可点击复制。{{ modifier }} + K 快速搜索。
-          </p>
-          <p>
-            从系统文件管理器复制文件后的网页粘贴取决于浏览器支持，文件拖拽和文件选择均可使用。图片一键复制支持
-            PNG，其他格式可下载原图。
-          </p>
-          <h3>团队共享与回收站</h3>
-          <p>
-            所有成员都可以查看、下载、重命名和移除共享内容。收藏仅对自己生效。删除会移入回收站，文件夹恢复后其中的内容重新可见。
-          </p>
-          <h3>传输说明</h3>
-          <p>
-            当前版本采用流式上传，失败后可在传输面板点击「重试」或「重试全部失败项」。重试会从头上传，刷新或离开页面后需重新选择文件。支持
-            HTTP 范围下载；上传断点续传将在后续版本加入。
-          </p>
-        </div></template
-      >
-      <form v-else-if="modal === 'edit'" class="text-editor-form" @submit.prevent="saveModal">
-        <label for="edit-content" class="visually-hidden">文字内容</label>
-        <textarea
-          id="edit-content"
+        <TextNotePanel
+          v-if="preview?.kind === 'text' && (!modal || modal === 'edit')"
           v-model="form.content"
-          aria-label="文字内容"
-          maxlength="30000"
-          :disabled="busy"
-          placeholder="写点什么，或者直接粘贴…"
-        ></textarea>
-        <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
-        <footer class="preview-actions">
-          <span class="editor-hint">编辑中 · 最多 30,000 字节</span>
-          <button class="button secondary" type="button" :disabled="busy" @click="modal = null">
-            取消
-          </button>
-          <button class="button primary" :disabled="busy">
-            {{ busy ? '正在保存…' : '保存修改' }}
-          </button>
-        </footer>
-      </form>
-      <form v-else-if="modal" class="dialog-form" @submit.prevent="saveModal">
-        <template v-if="modal === 'trash'"
-          ><div class="delete-notice">
-            <AppIcon name="trash" :size="30" />
-            <p>将 {{ form.ids.length }} 项内容移入回收站？</p>
-            <small>所有团队成员将暂时看不到这些内容。你可以在回收站中恢复。</small>
-          </div></template
-        ><template v-else-if="modal === 'invite'"
-          ><p class="dialog-description">创建独立账号，方便同事实时共享和下载。</p>
-          <label for="member-name">成员姓名</label
-          ><input
-            id="member-name"
-            v-model="form.name"
-            placeholder="例如：林晓"
-            required
-            maxlength="30" /><label for="member-username">登录账号</label
-          ><input
-            id="member-username"
-            v-model="form.username"
-            placeholder="3–32 位字母、数字、下划线"
-            pattern="[a-zA-Z0-9_-]{3,32}"
-            required
-            autocomplete="off" /><label for="member-password">初始密码</label
-          ><input
-            id="member-password"
-            v-model="form.password"
-            type="password"
-            placeholder="至少 12 位，成员登录后可修改"
-            required
-            minlength="12"
-            maxlength="72"
-            autocomplete="new-password" /></template
-        ><template v-else-if="modal === 'password'"
-          ><label for="old-password">当前密码</label
-          ><input
-            id="old-password"
-            v-model="form.old"
-            type="password"
-            required
-            autocomplete="current-password"
-          /><label for="new-password">新密码</label
-          ><input
-            id="new-password"
-            v-model="form.new"
-            type="password"
-            required
-            minlength="12"
-            maxlength="72"
-            placeholder="至少 12 位"
-            autocomplete="new-password"
-          />
-          <p class="field-hint">修改后会退出该账号的所有登录会话。</p></template
-        ><template v-else
-          ><label for="item-name">{{
-            modal === 'folder' ? '文件夹名称' : modal === 'text' ? '标题' : '名称'
-          }}</label
-          ><input
-            id="item-name"
-            v-model="form.name"
-            :placeholder="modal === 'folder' ? '给资料一个好找的名字' : '这份分享，关于什么？'"
-            required
-            maxlength="150"
-          /><template v-if="modal === 'text'"
-            ><label for="item-content">文字内容</label
-            ><textarea
-              id="item-content"
-              v-model="form.content"
-              placeholder="写点什么，或者直接粘贴…"
-              rows="8"
-              required
-              maxlength="10000"
-            ></textarea>
-            <p class="field-hint">支持纯文字和链接，最多 30,000 字节。</p></template
-          ></template
+          :item="preview"
+          :editing="modal === 'edit'"
+          :busy="busy"
+          :error="formError"
+          @edit="openModal('edit', preview)"
+          @cancel="modal = null"
+          @save="saveModal"
+          @copy="copy"
+          @copy-link="copyLink(preview)"
+        />
+        <template v-else-if="modal === 'members'"
+          ><p class="dialog-description">这个空间里的文件和文字，对所有团队成员可见。</p>
+          <div class="member-list">
+            <div v-for="member in members" :key="member.id" class="member-row">
+              <span class="avatar">{{ member.name.slice(0, 1) }}</span>
+              <div>
+                <strong>{{ member.name }}</strong
+                ><small>{{ member.username }}</small>
+              </div>
+              <span class="member-role">{{ member.role === 'admin' ? '管理员' : '成员' }}</span>
+            </div>
+          </div>
+          <button v-if="user.role === 'admin'" class="button primary" @click="openModal('invite')">
+            <AppIcon name="plus" :size="17" />添加团队成员
+          </button></template
         >
-        <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
-        <footer class="dialog-actions">
-          <button class="button secondary" type="button" :disabled="busy" @click="modal = null">
-            取消</button
-          ><button
-            class="button"
-            :class="modal === 'trash' ? 'danger' : 'primary'"
-            :disabled="busy"
+        <template v-else-if="modal === 'settings'"
+          ><div class="settings-profile">
+            <span class="avatar">{{ user.name.slice(0, 1) }}</span>
+            <div>
+              <strong>{{ user.name }}</strong>
+              <p>{{ user.username }} · {{ user.role === 'admin' ? '空间管理员' : '团队成员' }}</p>
+            </div>
+          </div>
+          <button class="settings-row" @click="openModal('password')">
+            <AppIcon name="lock" />修改登录密码<AppIcon name="right" :size="16" /></button
+          ><button class="settings-row logout-row" @click="logout">
+            <AppIcon name="logout" />退出登录<AppIcon name="right" :size="16" /></button
+        ></template>
+        <template v-else-if="modal === 'help'"
+          ><div class="help-content">
+            <h3>文件与图片</h3>
+            <p>
+              将文件拖入工作空间，或点击「上传文件」。支持同时上传多个文件，单个文件上限为 90
+              MB。上传队列会显示真实进度。
+            </p>
+            <h3>快捷键与剪贴板</h3>
+            <p>
+              Windows 使用 Ctrl，Mac 使用 ⌘。在页面空白处按 {{ modifier }} + V
+              可粘贴截图或文字；文字便签可点击复制。{{ modifier }} + K 快速搜索。
+            </p>
+            <p>
+              从系统文件管理器复制文件后的网页粘贴取决于浏览器支持，文件拖拽和文件选择均可使用。图片一键复制支持
+              PNG，其他格式可下载原图。
+            </p>
+            <h3>团队共享与回收站</h3>
+            <p>
+              所有成员都可以查看、下载、重命名和移除共享内容。收藏仅对自己生效。删除会移入回收站，文件夹恢复后其中的内容重新可见。
+            </p>
+            <h3>传输说明</h3>
+            <p>
+              当前版本采用流式上传，失败后可在传输面板点击「重试」或「重试全部失败项」。重试会从头上传，刷新或离开页面后需重新选择文件。支持
+              HTTP 范围下载；上传断点续传将在后续版本加入。
+            </p>
+          </div></template
+        >
+        <form v-else-if="modal" class="dialog-form" @submit.prevent="saveModal">
+          <template v-if="modal === 'trash'"
+            ><div class="delete-notice">
+              <AppIcon name="trash" :size="30" />
+              <p>将 {{ form.ids.length }} 项内容移入回收站？</p>
+              <small>所有团队成员将暂时看不到这些内容。你可以在回收站中恢复。</small>
+            </div></template
+          ><template v-else-if="modal === 'invite'"
+            ><p class="dialog-description">创建独立账号，方便同事实时共享和下载。</p>
+            <label for="member-name">成员姓名</label
+            ><input
+              id="member-name"
+              v-model="form.name"
+              placeholder="例如：林晓"
+              required
+              maxlength="30" /><label for="member-username">登录账号</label
+            ><input
+              id="member-username"
+              v-model="form.username"
+              placeholder="3–32 位字母、数字、下划线"
+              pattern="[a-zA-Z0-9_-]{3,32}"
+              required
+              autocomplete="off" /><label for="member-password">初始密码</label
+            ><input
+              id="member-password"
+              v-model="form.password"
+              type="password"
+              placeholder="至少 12 位，成员登录后可修改"
+              required
+              minlength="12"
+              maxlength="72"
+              autocomplete="new-password" /></template
+          ><template v-else-if="modal === 'password'"
+            ><label for="old-password">当前密码</label
+            ><input
+              id="old-password"
+              v-model="form.old"
+              type="password"
+              required
+              autocomplete="current-password"
+            /><label for="new-password">新密码</label
+            ><input
+              id="new-password"
+              v-model="form.new"
+              type="password"
+              required
+              minlength="12"
+              maxlength="72"
+              placeholder="至少 12 位"
+              autocomplete="new-password"
+            />
+            <p class="field-hint">修改后会退出该账号的所有登录会话。</p></template
+          ><template v-else
+            ><label for="item-name">{{
+              modal === 'folder' ? '文件夹名称' : modal === 'text' ? '标题' : '名称'
+            }}</label
+            ><input
+              id="item-name"
+              v-model="form.name"
+              :placeholder="modal === 'folder' ? '给资料一个好找的名字' : '这份分享，关于什么？'"
+              required
+              maxlength="150"
+            /><template v-if="modal === 'text'"
+              ><label for="item-content">文字内容</label
+              ><textarea
+                id="item-content"
+                v-model="form.content"
+                placeholder="写点什么，或者直接粘贴…"
+                rows="8"
+                required
+                maxlength="10000"
+              ></textarea>
+              <p class="field-hint">支持纯文字和链接，最多 30,000 字节。</p></template
+            ></template
           >
-            {{
-              busy
-                ? '正在保存…'
-                : modal === 'trash'
-                  ? '移入回收站'
-                  : modal === 'text'
-                    ? '发布到共享空间'
-                    : '确认保存'
-            }}<AppIcon v-if="modal === 'text'" name="send" :size="16" />
-          </button>
-        </footer>
-      </form>
-      <template v-else-if="preview"
-        ><div class="preview-meta">
-          <span class="avatar tiny">{{ preview.owner.slice(0, 1) }}</span
-          >{{ preview.owner }}<span>·</span>{{ dateLabel(itemUpdatedAt(preview)) }}<span>·</span
-          >{{ sizeLabel(preview.size) }}
-        </div>
-        <div v-if="preview.kind === 'image'" class="image-preview">
-          <img :src="`/api/files/${preview.id}?preview=1`" :alt="preview.name" />
-        </div>
-        <pre v-else-if="preview.kind === 'text'" class="text-preview" tabindex="0">{{
-          preview.content
-        }}</pre>
-        <DocumentPreview v-else :item="preview" @copy="copy" />
-        <div class="preview-actions">
-          <button class="button secondary" @click="copyLink(preview)">
-            <AppIcon name="link" :size="17" />复制链接</button
-          ><button
-            v-if="preview.kind === 'text'"
-            class="button secondary"
-            @click="openModal('edit', preview)"
-          >
-            <AppIcon name="edit" :size="17" />编辑</button
-          ><button
-            v-if="preview.kind === 'image' && preview.mime === 'image/png'"
-            class="button secondary"
-            @click="copyImage(preview)"
-          >
-            <AppIcon name="copy" :size="17" />复制图片</button
-          ><button
-            class="button primary"
-            @click="preview.kind === 'text' ? copy(preview.content) : download(preview)"
-          >
-            <AppIcon :name="preview.kind === 'text' ? 'copy' : 'download'" :size="17" />{{
-              preview.kind === 'text' ? '复制文字' : '下载文件'
-            }}
-          </button>
-        </div></template
-      >
-    </section>
-  </div>
-  <div v-if="toast" class="toast" :class="toast.kind" role="status">
-    <AppIcon :name="toast.kind === 'error' ? 'warning' : 'success'" :size="19" />{{ toast.message }}
-  </div>
+          <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
+          <footer class="dialog-actions">
+            <button class="button secondary" type="button" :disabled="busy" @click="modal = null">
+              取消</button
+            ><button
+              class="button"
+              :class="modal === 'trash' ? 'danger' : 'primary'"
+              :disabled="busy"
+            >
+              {{
+                busy
+                  ? '正在保存…'
+                  : modal === 'trash'
+                    ? '移入回收站'
+                    : modal === 'text'
+                      ? '发布到共享空间'
+                      : '确认保存'
+              }}<AppIcon v-if="modal === 'text'" name="send" :size="16" />
+            </button>
+          </footer>
+        </form>
+        <template v-else-if="preview"
+          ><div class="preview-meta">
+            <span class="avatar tiny">{{ preview.owner.slice(0, 1) }}</span
+            >{{ preview.owner }}<span>·</span>{{ dateLabel(itemUpdatedAt(preview)) }}<span>·</span
+            >{{ sizeLabel(preview.size) }}
+          </div>
+          <div v-if="preview.kind === 'image'" class="image-preview">
+            <img :src="`/api/files/${preview.id}?preview=1`" :alt="preview.name" />
+          </div>
+          <DocumentPreview v-else :item="preview" @copy="copy" />
+          <div class="preview-actions">
+            <button class="button secondary" @click="copyLink(preview)">
+              <AppIcon name="link" :size="17" />复制链接</button
+            ><button
+              v-if="preview.kind === 'image' && preview.mime === 'image/png'"
+              class="button secondary"
+              @click="copyImage(preview)"
+            >
+              <AppIcon name="copy" :size="17" />复制图片</button
+            ><button
+              class="button primary"
+              @click="preview.kind === 'text' ? copy(preview.content) : download(preview)"
+            >
+              <AppIcon :name="preview.kind === 'text' ? 'copy' : 'download'" :size="17" />{{
+                preview.kind === 'text' ? '复制文字' : '下载文件'
+              }}
+            </button>
+          </div></template
+        >
+      </section>
+    </div>
+  </Transition>
+  <Transition name="feedback">
+    <div v-if="toast" class="toast" :class="toast.kind" role="status">
+      <AppIcon :name="toast.kind === 'error' ? 'warning' : 'success'" :size="19" />{{
+        toast.message
+      }}
+    </div>
+  </Transition>
 </template>
