@@ -2331,6 +2331,14 @@ kbd {
   width: 100%;
   resize: none;
   border-color: var(--control);
+  transition: border-color 120ms ease;
+}
+/* Use the existing border for focus, rather than adding a second outer ring. */
+.text-editor-form textarea:focus {
+  border-color: var(--muted);
+  outline: none;
+  outline-offset: 0;
+  box-shadow: none;
 }
 .text-editor-form .form-error {
   flex-shrink: 0;
