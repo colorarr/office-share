@@ -756,9 +756,6 @@ kbd {
 .star-button.starred {
   color: #886b28;
 }
-.star-button.starred svg {
-  fill: #eee4c7;
-}
 .mobile-file-meta {
   display: none;
 }

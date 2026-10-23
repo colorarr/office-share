@@ -37,7 +37,11 @@ import {
   PhPaperPlaneTilt,
 } from '@phosphor-icons/vue';
 
-defineProps({ name: { type: String, default: 'file' }, size: { type: Number, default: 20 } });
+defineProps({
+  name: { type: String, default: 'file' },
+  size: { type: Number, default: 20 },
+  weight: { type: String, default: 'regular' },
+});
 const icons = {
   squares: PhSquaresFour,
   folder: PhFolderSimple,
@@ -78,5 +82,5 @@ const icons = {
 </script>
 
 <template>
-  <component :is="icons[name] || icons.file" :size="size" weight="regular" aria-hidden="true" />
+  <component :is="icons[name] || icons.file" :size="size" :weight="weight" aria-hidden="true" />
 </template>

@@ -111,3 +111,7 @@
 ### 编辑框单层边框修正
 
 全局 textarea:focus 的 2px outline 与正文编辑框自身 1px border 叠加，形成双框。仅为正文编辑器覆盖聚焦样式：outline/box-shadow 为空，保留 1px border 并在聚焦时加深颜色，120ms 颜色过渡；不改变尺寸、内边距或滚动区域。其他表单与按钮的焦点提示保持原样。
+
+### 收藏星标实心状态
+
+AppIcon 暴露 weight 属性，默认为 regular。收藏按钮按 starred 在 Phosphor 的 fill / regular 两种真实 SVG 形状间切换，不再通过修改 SVG 根节点的 fill 来模拟填充；列表、网格和更多菜单一致。按钮同步 aria-pressed、取消收藏文字和悬浮提示。浏览器验证：列表收藏后路径改变且 pressed=true；切换网格仍为同一实心路径；取消后恢复原空心路径。

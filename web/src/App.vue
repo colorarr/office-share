@@ -948,13 +948,18 @@ onUnmounted(() => {
                           ><button
                             class="icon-button star-button"
                             :class="{ starred: item.starred }"
+                            :aria-pressed="item.starred"
                             :aria-label="
                               item.starred ? `取消收藏 ${item.name}` : `收藏 ${item.name}`
                             "
                             :title="item.starred ? '取消收藏' : '收藏'"
                             @click="toggleStar(item)"
                           >
-                            <AppIcon name="star" :size="17" /></button
+                            <AppIcon
+                              name="star"
+                              :size="17"
+                              :weight="item.starred ? 'fill' : 'regular'"
+                            /></button
                           ><button
                             v-if="item.kind === 'file' || item.kind === 'image'"
                             class="icon-button"
@@ -1031,10 +1036,16 @@ onUnmounted(() => {
                     v-if="view !== 'trash'"
                     class="icon-button star-button"
                     :class="{ starred: item.starred }"
-                    :aria-label="`收藏 ${item.name}`"
+                    :aria-pressed="item.starred"
+                    :aria-label="item.starred ? `取消收藏 ${item.name}` : `收藏 ${item.name}`"
+                    :title="item.starred ? '取消收藏' : '收藏'"
                     @click="toggleStar(item)"
                   >
-                    <AppIcon name="star" :size="18" /></button
+                    <AppIcon
+                      name="star"
+                      :size="18"
+                      :weight="item.starred ? 'fill' : 'regular'"
+                    /></button
                   ><button v-else class="icon-button" aria-label="恢复" @click="restore(item)">
                     <AppIcon name="restore" />
                   </button>
@@ -1259,7 +1270,9 @@ onUnmounted(() => {
           rowMenu = null;
         "
       >
-        <AppIcon name="star" :size="17" />{{ rowMenu.item.starred ? '取消收藏' : '添加收藏' }}
+        <AppIcon name="star" :size="17" :weight="rowMenu.item.starred ? 'fill' : 'regular'" />{{
+          rowMenu.item.starred ? '取消收藏' : '添加收藏'
+        }}
       </button>
       <button
         role="menuitem"
