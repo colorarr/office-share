@@ -47,6 +47,7 @@ type Item struct {
 	Owner   string `json:"owner"`
 	OwnerID string `json:"ownerId"`
 	Created int64  `json:"created"`
+	Updated int64  `json:"updated"`
 	Deleted bool   `json:"deleted"`
 	Starred bool   `json:"starred"`
 }
@@ -131,7 +132,7 @@ func New(data, web, baseURL, dsn, adminPassword string) (*App, error) {
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS users (id VARCHAR(48) PRIMARY KEY, username VARCHAR(64) NOT NULL UNIQUE, name VARCHAR(100) NOT NULL, role VARCHAR(16) NOT NULL, password VARCHAR(100) NOT NULL, created BIGINT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS sessions (token VARCHAR(64) PRIMARY KEY, user_id VARCHAR(48) NOT NULL, expires BIGINT NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS items (id VARCHAR(48) PRIMARY KEY, name VARCHAR(255) NOT NULL, kind VARCHAR(16) NOT NULL, parent VARCHAR(48) NOT NULL, content TEXT NOT NULL, mime VARCHAR(255) NOT NULL, size BIGINT NOT NULL, owner_id VARCHAR(48) NOT NULL, created BIGINT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS items (id VARCHAR(48) PRIMARY KEY, name VARCHAR(255) NOT NULL, kind VARCHAR(16) NOT NULL, parent VARCHAR(48) NOT NULL, content TEXT NOT NULL, mime VARCHAR(255) NOT NULL, size BIGINT NOT NULL, owner_id VARCHAR(48) NOT NULL, created BIGINT NOT NULL, updated BIGINT NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS stars (user_id VARCHAR(48) NOT NULL, item_id VARCHAR(48) NOT NULL, PRIMARY KEY(user_id,item_id))`,
 		`CREATE TABLE IF NOT EXISTS activities (id VARCHAR(48) PRIMARY KEY, user_id VARCHAR(48) NOT NULL, action VARCHAR(100) NOT NULL, target VARCHAR(255) NOT NULL, created BIGINT NOT NULL)`,
 	}
@@ -140,6 +141,10 @@ func New(data, web, baseURL, dsn, adminPassword string) (*App, error) {
 			db.Close()
 			return nil, err
 		}
+	}
+	if err = migrateItemUpdates(db); err != nil {
+		db.Close()
+		return nil, err
 	}
 	var n int
 	if err = db.QueryRow("SELECT COUNT(*) FROM users").Scan(&n); err != nil {
@@ -181,6 +186,10 @@ func New(data, web, baseURL, dsn, adminPassword string) (*App, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	if _, err = db.Exec("UPDATE items SET updated=created WHERE updated=0"); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return &App{DB: db, Data: data, Web: web, BaseURL: strings.TrimRight(baseURL, "/"), secure: strings.HasPrefix(baseURL, "https://"), clients: map[string]client{}, limits: map[string]attempt{}, uploads: make(chan struct{}, 8)}, nil
 }
@@ -333,15 +342,35 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 	reply(w, 200, map[string]bool{"ok": true})
 }
 
-const itemSelect = `SELECT i.id,i.name,i.kind,i.parent,i.content,i.mime,i.size,i.owner_id,u.name,i.created,i.deleted,CASE WHEN s.item_id IS NULL THEN 0 ELSE 1 END FROM items i JOIN users u ON u.id=i.owner_id LEFT JOIN stars s ON s.item_id=i.id AND s.user_id=?`
+// migrateItemUpdates is additive and works with existing SQLite and MySQL data.
+func migrateItemUpdates(db *sql.DB) error {
+	rows, err := db.Query("SELECT * FROM items LIMIT 0")
+	if err != nil {
+		return err
+	}
+	columns, err := rows.Columns()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, column := range columns {
+		if column == "updated" {
+			return nil
+		}
+	}
+	_, err = db.Exec("ALTER TABLE items ADD COLUMN updated BIGINT NOT NULL DEFAULT 0")
+	return err
+}
+
+const itemSelect = `SELECT i.id,i.name,i.kind,i.parent,i.content,i.mime,i.size,i.owner_id,u.name,i.created,i.updated,i.deleted,CASE WHEN s.item_id IS NULL THEN 0 ELSE 1 END FROM items i JOIN users u ON u.id=i.owner_id LEFT JOIN stars s ON s.item_id=i.id AND s.user_id=?`
 
 func scanItem(row interface{ Scan(...any) error }) (Item, error) {
 	var i Item
-	err := row.Scan(&i.ID, &i.Name, &i.Kind, &i.Parent, &i.Content, &i.MIME, &i.Size, &i.OwnerID, &i.Owner, &i.Created, &i.Deleted, &i.Starred)
+	err := row.Scan(&i.ID, &i.Name, &i.Kind, &i.Parent, &i.Content, &i.MIME, &i.Size, &i.OwnerID, &i.Owner, &i.Created, &i.Updated, &i.Deleted, &i.Starred)
 	return i, err
 }
 func (a *App) list(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.QueryContext(r.Context(), itemSelect+" ORDER BY i.created DESC LIMIT 5000", current(r).ID)
+	rows, err := a.DB.QueryContext(r.Context(), itemSelect+" ORDER BY i.updated DESC, i.created DESC, i.id DESC LIMIT 5000", current(r).ID)
 	if err != nil {
 		fail(w, 500, "读取文件失败")
 		return
@@ -406,7 +435,8 @@ func (a *App) create(w http.ResponseWriter, r *http.Request) {
 	if in.Kind == "folder" {
 		in.Content = ""
 	}
-	_, err := a.DB.Exec("INSERT INTO items (id,name,kind,parent,content,mime,size,owner_id,created,deleted) VALUES (?,?,?,?,?,?,?,?,?,0)", id, in.Name, in.Kind, in.Parent, in.Content, "text/plain", len(in.Content), u.ID, time.Now().UnixMilli())
+	now := time.Now().UnixMilli()
+	_, err := a.DB.Exec("INSERT INTO items (id,name,kind,parent,content,mime,size,owner_id,created,updated,deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)", id, in.Name, in.Kind, in.Parent, in.Content, "text/plain", len(in.Content), u.ID, now, now)
 	if err != nil {
 		fail(w, 500, "保存失败")
 		return
@@ -442,10 +472,10 @@ func (a *App) update(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400, "名称须为 1–150 个字符，不含斜线和换行")
 			return
 		}
-		_, err = a.DB.Exec("UPDATE items SET name=? WHERE id=?", strings.TrimSpace(in.Name), i.ID)
+		_, err = a.DB.Exec("UPDATE items SET name=?,updated=? WHERE id=?", strings.TrimSpace(in.Name), time.Now().UnixMilli(), i.ID)
 		action = "重命名了"
 	case "trash", "restore":
-		_, err = a.DB.Exec("UPDATE items SET deleted=? WHERE id=?", in.Action == "trash", i.ID)
+		_, err = a.DB.Exec("UPDATE items SET deleted=?,updated=? WHERE id=?", in.Action == "trash", time.Now().UnixMilli(), i.ID)
 		if in.Action == "trash" {
 			action = "移入回收站："
 		} else {
@@ -456,7 +486,7 @@ func (a *App) update(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400, "文字内容格式不正确")
 			return
 		}
-		_, err = a.DB.Exec("UPDATE items SET content=?,size=? WHERE id=?", *in.Content, len(*in.Content), i.ID)
+		_, err = a.DB.Exec("UPDATE items SET content=?,size=?,updated=? WHERE id=?", *in.Content, len(*in.Content), time.Now().UnixMilli(), i.ID)
 		action = "更新了"
 	default:
 		fail(w, 400, "操作不存在")
@@ -560,7 +590,8 @@ func (a *App) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := current(r)
-	_, err = a.DB.Exec("INSERT INTO items (id,name,kind,parent,content,mime,size,owner_id,created,deleted) VALUES (?,?,?,?,?,?,?,?,?,0)", id, name, kind, parent, "", mt, size, u.ID, time.Now().UnixMilli())
+	now := time.Now().UnixMilli()
+	_, err = a.DB.Exec("INSERT INTO items (id,name,kind,parent,content,mime,size,owner_id,created,updated,deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)", id, name, kind, parent, "", mt, size, u.ID, now, now)
 	if err != nil {
 		fail(w, 500, "保存文件信息失败")
 		return

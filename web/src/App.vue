@@ -6,6 +6,7 @@ import DocumentPreview from './components/DocumentPreview.vue';
 import { api } from './api/client';
 import { useWorkspace } from './composables/useWorkspace';
 import { sizeLabel, dateLabel, fileType } from './utils/format';
+import { compareItems, itemUpdatedAt } from './utils/item-order';
 import { nameClipboardFiles } from './utils/clipboard-files';
 
 const toast = ref(null);
@@ -42,7 +43,7 @@ const view = ref('all');
 const parent = ref('');
 const tab = ref('all');
 const query = ref('');
-const sort = ref('new');
+const sort = ref('updated');
 const layout = ref('list');
 const selection = ref([]);
 const fileInput = ref(null);
@@ -61,20 +62,20 @@ const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const modifier = isMac ? '⌘' : 'Ctrl';
 const nav = [
   { id: 'all', label: '全部文件', icon: 'squares' },
-  { id: 'recent', label: '最近共享', icon: 'clock' },
+  { id: 'recent', label: '最近更新', icon: 'clock' },
   { id: 'starred', label: '我的收藏', icon: 'star' },
   { id: 'trash', label: '回收站', icon: 'trash' },
 ];
 const title = computed(() =>
   parent.value
     ? items.value.find((item) => item.id === parent.value)?.name || '文件夹'
-    : { all: '团队共享', recent: '最近共享', starred: '我的收藏', trash: '回收站' }[view.value],
+    : { all: '团队共享', recent: '最近更新', starred: '我的收藏', trash: '回收站' }[view.value],
 );
 const subtitle = computed(
   () =>
     ({
       all: '文件、图片与灵感，都在同一个地方。',
-      recent: '接住每一份新进展，不错过团队的更新。',
+      recent: '最近 7 天有更新的内容，按更新时间排列。',
       starred: '重要的内容，随时回来找到。',
       trash: '误删也没关系，随时恢复共享内容。',
     })[view.value],
@@ -96,7 +97,7 @@ const scope = computed(() =>
     if (view.value === 'trash') return item.deleted;
     if (inTrash(item)) return false;
     if (view.value === 'starred') return item.starred;
-    if (view.value === 'recent') return item.created > Date.now() - 7 * 86400000;
+    if (view.value === 'recent') return itemUpdatedAt(item) > Date.now() - 7 * 86400000;
     return query.value ? true : item.parent === parent.value;
   }),
 );
@@ -117,13 +118,7 @@ const filtered = computed(() =>
           `${item.name} ${item.content} ${item.owner}`.toLocaleLowerCase().includes(needle))
       );
     })
-    .sort((a, b) =>
-      sort.value === 'name'
-        ? a.name.localeCompare(b.name, 'zh-CN')
-        : sort.value === 'size'
-          ? b.size - a.size
-          : b.created - a.created,
-    ),
+    .sort((a, b) => compareItems(a, b, sort.value)),
 );
 const folders = computed(() =>
   activeItems.value.filter((i) => i.kind === 'folder' && i.parent === parent.value).slice(0, 4),
@@ -250,7 +245,7 @@ function openModal(type, item = null) {
   else if (type === 'password') form.value = { old: '', new: '' };
   else if (type === 'trash') form.value = { ids: item ? [item.id] : [...selection.value] };
   else form.value = { name: '' };
-  nextTick(() => document.querySelector('.dialog input, .dialog textarea')?.focus());
+  nextTick(() => document.querySelector('.dialog input:not(:disabled), .dialog textarea')?.focus());
 }
 async function saveModal() {
   if (busy.value) return;
@@ -268,7 +263,6 @@ async function saveModal() {
       await api.update(form.value.id, { action: 'rename', name: form.value.name });
     } else if (type === 'edit') {
       await api.update(form.value.id, { action: 'edit', content: form.value.content });
-      preview.value = null;
     } else if (type === 'invite') {
       await api.invite(form.value);
       members.value = await api.members();
@@ -283,6 +277,9 @@ async function saveModal() {
     }
     modal.value = type === 'invite' ? 'members' : null;
     if (user.value) await refresh();
+    if (type === 'edit') {
+      preview.value = items.value.find((item) => item.id === form.value.id) || preview.value;
+    }
     if (type !== 'password') notify(type === 'trash' ? '已移入回收站，可随时恢复' : '保存成功');
   } catch (error) {
     formError.value = error.message;
@@ -747,7 +744,7 @@ onUnmounted(() => {
                 >
                   <AppIcon name="plus" :size="16" />新建文件夹</button
                 ><select v-model="sort" aria-label="排序方式">
-                  <option value="new">最新共享</option>
+                  <option value="updated">最近更新</option>
                   <option value="name">按名称排序</option>
                   <option value="size">按大小排序</option>
                 </select>
@@ -863,7 +860,7 @@ onUnmounted(() => {
                     </th>
                     <th class="name-column">名称</th>
                     <th class="owner-column">共享者</th>
-                    <th class="time-column">共享时间</th>
+                    <th class="time-column">更新时间</th>
                     <th class="size-column">大小</th>
                     <th class="actions-column"><span class="visually-hidden">操作</span></th>
                   </tr>
@@ -897,7 +894,7 @@ onUnmounted(() => {
                           ><small v-else>{{ fileType(item) }}</small>
                           <span class="mobile-file-meta"
                             >{{ fileType(item) }} · {{ item.owner }} ·
-                            {{ dateLabel(item.created) }} ·
+                            {{ dateLabel(itemUpdatedAt(item)) }} ·
                             {{ item.kind === 'folder' ? '文件夹' : sizeLabel(item.size) }}</span
                           >
                         </span>
@@ -909,7 +906,7 @@ onUnmounted(() => {
                         >{{ item.owner }}</span
                       >
                     </td>
-                    <td class="time-column">{{ dateLabel(item.created) }}</td>
+                    <td class="time-column">{{ dateLabel(itemUpdatedAt(item)) }}</td>
                     <td class="size-column">
                       {{ item.kind === 'folder' ? '—' : sizeLabel(item.size) }}
                     </td>
@@ -997,7 +994,7 @@ onUnmounted(() => {
                 <div class="item-card-details">
                   <button @click="openItem(item)">
                     <strong>{{ item.name }}</strong
-                    ><small>{{ item.owner }} · {{ dateLabel(item.created) }}</small></button
+                    ><small>{{ item.owner }} · {{ dateLabel(itemUpdatedAt(item)) }}</small></button
                   ><button
                     v-if="view !== 'trash'"
                     class="icon-button star-button"
@@ -1268,14 +1265,18 @@ onUnmounted(() => {
   >
     <section
       class="dialog"
-      :class="{ 'preview-dialog': preview && !modal, 'members-dialog': modal === 'members' }"
+      :class="{
+        'preview-dialog': preview && !modal,
+        'text-dialog': (preview?.kind === 'text' && !modal) || modal === 'edit',
+        'members-dialog': modal === 'members',
+      }"
       role="dialog"
       aria-modal="true"
       :aria-label="modal ? modalTitles[modal] : preview.name"
     >
       <header class="dialog-heading">
         <div>
-          <h2>{{ modal ? modalTitles[modal] : preview.name }}</h2>
+          <h2>{{ modal === 'edit' ? form.name : modal ? modalTitles[modal] : preview.name }}</h2>
         </div>
         <button
           class="icon-button"
@@ -1286,6 +1287,11 @@ onUnmounted(() => {
           <AppIcon name="close" :size="22" />
         </button>
       </header>
+      <div v-if="modal === 'edit' && preview" class="preview-meta">
+        <span class="avatar tiny">{{ preview.owner.slice(0, 1) }}</span>
+        {{ preview.owner }}<span>·</span>{{ dateLabel(itemUpdatedAt(preview)) }}<span>·</span>
+        {{ sizeLabel(preview.size) }}
+      </div>
       <template v-if="modal === 'members'"
         ><p class="dialog-description">这个空间里的文件和文字，对所有团队成员可见。</p>
         <div class="member-list">
@@ -1342,6 +1348,27 @@ onUnmounted(() => {
           </p>
         </div></template
       >
+      <form v-else-if="modal === 'edit'" class="text-editor-form" @submit.prevent="saveModal">
+        <label for="edit-content" class="visually-hidden">文字内容</label>
+        <textarea
+          id="edit-content"
+          v-model="form.content"
+          aria-label="文字内容"
+          maxlength="30000"
+          :disabled="busy"
+          placeholder="写点什么，或者直接粘贴…"
+        ></textarea>
+        <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
+        <footer class="preview-actions">
+          <span class="editor-hint">编辑中 · 最多 30,000 字节</span>
+          <button class="button secondary" type="button" :disabled="busy" @click="modal = null">
+            取消
+          </button>
+          <button class="button primary" :disabled="busy">
+            {{ busy ? '正在保存…' : '保存修改' }}
+          </button>
+        </footer>
+      </form>
       <form v-else-if="modal" class="dialog-form" @submit.prevent="saveModal">
         <template v-if="modal === 'trash'"
           ><div class="delete-notice">
@@ -1396,20 +1423,15 @@ onUnmounted(() => {
           <p class="field-hint">修改后会退出该账号的所有登录会话。</p></template
         ><template v-else
           ><label for="item-name">{{
-            modal === 'folder'
-              ? '文件夹名称'
-              : modal === 'text' || modal === 'edit'
-                ? '标题'
-                : '名称'
+            modal === 'folder' ? '文件夹名称' : modal === 'text' ? '标题' : '名称'
           }}</label
           ><input
             id="item-name"
             v-model="form.name"
-            :disabled="modal === 'edit'"
             :placeholder="modal === 'folder' ? '给资料一个好找的名字' : '这份分享，关于什么？'"
             required
             maxlength="150"
-          /><template v-if="modal === 'text' || modal === 'edit'"
+          /><template v-if="modal === 'text'"
             ><label for="item-content">文字内容</label
             ><textarea
               id="item-content"
@@ -1446,7 +1468,7 @@ onUnmounted(() => {
       <template v-else-if="preview"
         ><div class="preview-meta">
           <span class="avatar tiny">{{ preview.owner.slice(0, 1) }}</span
-          >{{ preview.owner }}<span>·</span>{{ dateLabel(preview.created) }}<span>·</span
+          >{{ preview.owner }}<span>·</span>{{ dateLabel(itemUpdatedAt(preview)) }}<span>·</span
           >{{ sizeLabel(preview.size) }}
         </div>
         <div v-if="preview.kind === 'image'" class="image-preview">

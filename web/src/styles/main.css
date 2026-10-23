@@ -2289,3 +2289,77 @@ kbd {
     min-height: 44px;
   }
 }
+
+/* Reading and editing use the same stable canvas, on desktop and on phones. */
+.text-dialog {
+  width: 850px;
+  height: min(720px, calc(100dvh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.text-dialog > .dialog-heading,
+.text-dialog > .preview-meta,
+.text-dialog > .preview-actions {
+  flex-shrink: 0;
+}
+.text-dialog .text-preview,
+.text-editor-form textarea {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 23px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.9;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  border: 1px solid transparent;
+  background: #f8f9fb;
+  border-radius: var(--radius-control);
+}
+.text-editor-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.text-editor-form textarea {
+  width: 100%;
+  resize: none;
+  border-color: var(--control);
+}
+.text-editor-form .form-error {
+  flex-shrink: 0;
+  max-height: 80px;
+  overflow: auto;
+}
+.text-dialog .preview-actions {
+  min-height: 36px;
+  margin-top: 24px;
+  flex-shrink: 0;
+}
+.editor-hint {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+@media (max-width: 640px) {
+  .text-dialog {
+    height: min(720px, calc(100dvh - 24px));
+  }
+  .text-dialog .text-preview,
+  .text-editor-form textarea {
+    padding: 16px;
+  }
+  .text-dialog .preview-actions {
+    min-height: 40px;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .editor-hint {
+    font-size: 11px;
+  }
+}
