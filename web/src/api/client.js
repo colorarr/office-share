@@ -35,7 +35,7 @@ export const api = {
   password: (data) => request('/password', { method: 'POST', body: JSON.stringify(data) }),
 };
 
-export function uploadFile(file, parent, progress, { signal } = {}) {
+export function uploadFile(file, parent, progress, { signal, onUploaded = () => {} } = {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const abort = () => xhr.abort();
@@ -51,8 +51,20 @@ export function uploadFile(file, parent, progress, { signal } = {}) {
     xhr.open('POST', `/api/upload?parent=${encodeURIComponent(parent)}`);
     xhr.timeout = 30 * 60 * 1000;
     xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) progress(Math.round((event.loaded / event.total) * 100));
+      if (
+        event.lengthComputable &&
+        Number.isFinite(event.loaded) &&
+        Number.isFinite(event.total) &&
+        event.total > 0 &&
+        event.loaded >= 0 &&
+        event.loaded <= event.total
+      ) {
+        progress(Math.floor((event.loaded / event.total) * 100));
+      } else {
+        progress(null);
+      }
     };
+    xhr.upload.onload = onUploaded;
     xhr.onload = () => {
       let data;
       try {
@@ -65,7 +77,7 @@ export function uploadFile(file, parent, progress, { signal } = {}) {
       else fail(new Error(data.error || '上传失败，请点击重试'));
     };
     xhr.onerror = () => fail(new Error('网络连接中断，请检查网络后重试'));
-    xhr.ontimeout = () => fail(new Error('上传超时，请点击重试'));
+    xhr.ontimeout = () => fail(new Error('上传超时，结果尚未确认，请先检查列表再重试'));
     xhr.onabort = () => fail(new DOMException('上传已取消', 'AbortError'));
     if (signal?.aborted) {
       fail(new DOMException('上传已取消', 'AbortError'));

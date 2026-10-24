@@ -284,3 +284,115 @@ test('a retry that fails again stays available for another retry', async () => {
   assert.equal(task.attempts, 2);
   assert.equal(task.error, '仍然离线');
 });
+
+test('old refresh completions never clear a newer refresh indicator', async () => {
+  const requests = [deferred(), deferred()];
+  let index = 0;
+  const workspace = useWorkspace(() => {}, {
+    client: { items: () => requests[index++].promise, overview: async () => ({}) },
+  });
+  workspace.user.value = { id: 'member' };
+  const old = workspace.refresh();
+  const current = workspace.refresh();
+  assert.equal(workspace.refreshing.value, true);
+  requests[0].resolve([]);
+  await old;
+  assert.equal(workspace.refreshing.value, true);
+  requests[1].reject(new Error('temporary failure'));
+  await current;
+  assert.equal(workspace.refreshing.value, false);
+  assert.equal(workspace.loadError.value, 'temporary failure');
+});
+
+test('initial loading follows the newest request and disconnect clears refresh feedback', async () => {
+  const requests = [deferred(), deferred(), deferred()];
+  let index = 0;
+  const workspace = useWorkspace(() => {}, {
+    client: { items: () => requests[index++].promise, overview: async () => ({}) },
+    createEventSource: () => ({ close() {}, addEventListener() {} }),
+  });
+  const connecting = workspace.connect({ id: 'member' });
+  const current = workspace.refresh();
+  requests[0].resolve([]);
+  await connecting;
+  assert.equal(workspace.loading.value, true);
+  requests[1].resolve([{ id: 'new' }]);
+  await current;
+  assert.equal(workspace.loading.value, false);
+  const background = workspace.refresh();
+  assert.equal(workspace.refreshing.value, true);
+  workspace.disconnect();
+  assert.equal(workspace.refreshing.value, false);
+  requests[2].reject(new Error('late'));
+  await background;
+  assert.equal(workspace.loadError.value, '');
+});
+
+test('uploaded bytes remain active until the server confirms the save', async () => {
+  const response = deferred();
+  let report;
+  let uploaded;
+  const { workspace } = setup((_file, _parent, progress, { onUploaded }) => {
+    report = progress;
+    uploaded = onUploaded;
+    return response.promise;
+  });
+  workspace.upload([new File(['file'], 'report.txt')]);
+  const task = workspace.transfers.value[0];
+  report(null);
+  assert.equal(task.progress, null);
+  uploaded();
+  assert.equal(task.status, 'processing');
+  assert.equal(task.progress, 100);
+  assert.equal(workspace.activeTransfers.value.length, 1);
+  response.resolve({ id: 'stored' });
+  await settle();
+  assert.equal(task.status, 'done');
+  assert.equal(workspace.activeTransfers.value.length, 0);
+});
+
+test('late upload callbacks cannot affect a retry or a disconnected workspace', async () => {
+  const attempts = [];
+  const { workspace } = setup((_file, _parent, progress, options) => {
+    const response = deferred();
+    attempts.push({ ...response, progress, ...options });
+    return response.promise;
+  });
+  workspace.upload([new File(['file'], 'report.txt')]);
+  const task = workspace.transfers.value[0];
+  attempts[0].onUploaded();
+  attempts[0].reject(new Error('save failed'));
+  await settle();
+  assert.equal(task.status, 'error');
+  workspace.retryUpload(task);
+  attempts[0].progress(77);
+  attempts[0].onUploaded();
+  assert.equal(task.progress, 0);
+  assert.equal(task.status, 'uploading');
+  attempts[1].progress(25);
+  workspace.disconnect();
+  attempts[1].progress(100);
+  attempts[1].onUploaded();
+  assert.equal(task.progress, 25);
+  attempts[1].reject(new DOMException('aborted', 'AbortError'));
+  await settle();
+  assert.equal(workspace.transfers.value.length, 0);
+});
+
+test('completed uploads free queue slots even while the list refresh is slow', async () => {
+  const metadata = deferred();
+  let calls = 0;
+  const workspace = useWorkspace(() => {}, {
+    client: { items: () => metadata.promise, overview: async () => ({}) },
+    sendFile: async () => {
+      calls++;
+    },
+  });
+  workspace.user.value = { id: 'member' };
+  workspace.upload(Array.from({ length: 5 }, (_, id) => new File(['x'], `${id}.txt`)));
+  await settle();
+  assert.equal(calls, 5);
+  assert.ok(workspace.transfers.value.every((task) => task.status === 'done'));
+  metadata.resolve([]);
+  await settle();
+});

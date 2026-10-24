@@ -5,12 +5,16 @@ import FileMark from './components/FileMark.vue';
 import DocumentPreview from './components/DocumentPreview.vue';
 import TextNotePanel from './components/TextNotePanel.vue';
 import WorkspaceSkeleton from './components/WorkspaceSkeleton.vue';
+import PendingButton from './components/PendingButton.vue';
+import UploadProgress from './components/UploadProgress.vue';
 import { api } from './api/client';
 import { useWorkspace } from './composables/useWorkspace';
 import { useItemPreview } from './composables/useItemPreview';
+import { useDelayedIndicator } from './composables/useDelayedIndicator';
 import { sizeLabel, dateLabel, fileType } from './utils/format';
 import { compareItems, itemUpdatedAt } from './utils/item-order';
 import { nameClipboardFiles } from './utils/clipboard-files';
+import { transferLabel } from './utils/transfer-feedback';
 
 const toast = ref(null);
 let toastTimer;
@@ -27,6 +31,7 @@ const {
   transfers,
   connection,
   loading,
+  refreshing,
   loadError,
   pendingStars,
   toggleStar,
@@ -44,6 +49,8 @@ const initializing = ref(true);
 const loginForm = ref({ username: '', password: '' });
 const loginError = ref('');
 const busy = ref(false);
+const showBusy = useDelayedIndicator(() => busy.value);
+const showRefreshing = useDelayedIndicator(() => refreshing.value);
 const view = ref('all');
 const parent = ref('');
 const tab = ref('all');
@@ -520,6 +527,11 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <p class="visually-hidden" role="status">
+    {{
+      showBusy ? (modal ? (modal === 'trash' ? '正在移入回收站…' : '正在保存…') : '正在登录…') : ''
+    }}
+  </p>
   <div v-if="initializing" class="initializing">
     <span class="brand-symbol"><i></i><i></i><i></i><i></i></span>
     <p>正在打开工作空间…</p>
@@ -574,9 +586,14 @@ onUnmounted(() => {
           maxlength="72"
         />
         <p v-if="loginError" class="form-error" role="alert">{{ loginError }}</p>
-        <button class="button primary login-submit" :disabled="busy">
-          {{ busy ? '正在登录…' : '进入工作空间' }}<AppIcon name="arrow" :size="18" />
-        </button>
+        <PendingButton
+          type="submit"
+          class="primary login-submit"
+          :busy="busy"
+          pending-label="正在登录…"
+        >
+          进入工作空间<AppIcon name="arrow" :size="18" />
+        </PendingButton>
         <div class="login-hint">
           <AppIcon name="info" :size="17" /><span>首次使用？请联系管理员获取团队账号。</span>
         </div>
@@ -753,7 +770,10 @@ onUnmounted(() => {
               </button>
             </div>
           </section>
-          <section class="files-section" :aria-busy="loading">
+          <p class="visually-hidden" role="status">
+            {{ loading ? '正在加载共享内容…' : showRefreshing ? '正在更新共享内容…' : '' }}
+          </p>
+          <section class="files-section" :aria-busy="loading || refreshing">
             <div class="files-heading">
               <div v-if="parent" class="breadcrumbs">
                 <button @click="enterFolder()">团队共享</button
@@ -1064,7 +1084,13 @@ onUnmounted(() => {
               </article>
             </div>
             <div class="list-footer">
-              <span>{{ loading ? '正在加载共享内容…' : `共 ${filtered.length} 项内容` }}</span
+              <span class="list-update-status" aria-hidden="true">
+                <span :class="{ concealed: showRefreshing }">{{
+                  loading ? '正在加载共享内容…' : `共 ${filtered.length} 项内容`
+                }}</span>
+                <span class="list-update-label" :class="{ concealed: !showRefreshing }">
+                  <i class="spinner" aria-hidden="true"></i>正在更新共享内容…
+                </span> </span
               ><span><AppIcon name="lock" :size="13" />仅团队成员可见</span>
             </div>
           </section>
@@ -1203,18 +1229,12 @@ onUnmounted(() => {
         <div v-for="task in transfers" :key="task.id" class="transfer-item">
           <div class="transfer-item-heading">
             <span :title="task.name">{{ task.name }}</span>
-            <small :class="task.status">
-              {{
-                task.status === 'done'
-                  ? '已完成'
-                  : task.status === 'error'
-                    ? '上传失败'
-                    : task.status === 'waiting'
-                      ? '等待上传'
-                      : task.progress === 100
-                        ? '正在保存…'
-                        : `${task.progress}%`
-              }}
+            <small
+              :class="task.status"
+              role="status"
+              :aria-live="['uploading', 'error'].includes(task.status) ? 'off' : 'polite'"
+            >
+              {{ transferLabel(task) }}
             </small>
             <button
               v-if="task.status === 'error'"
@@ -1227,9 +1247,7 @@ onUnmounted(() => {
             </button>
           </div>
           <p v-if="task.status === 'error'" class="transfer-error">{{ task.error }}</p>
-          <div class="transfer-track">
-            <i :style="{ width: `${task.progress}%` }" :class="task.status"></i>
-          </div>
+          <UploadProgress :task="task" />
         </div>
         <div v-if="failedTransfers.length || completedCount" class="transfer-actions">
           <button v-if="failedTransfers.length" class="text-button" @click="retryFailed">
@@ -1488,21 +1506,16 @@ onUnmounted(() => {
           <footer class="dialog-actions">
             <button class="button secondary" type="button" :disabled="busy" @click="modal = null">
               取消</button
-            ><button
-              class="button"
+            ><PendingButton
+              type="submit"
               :class="modal === 'trash' ? 'danger' : 'primary'"
-              :disabled="busy"
+              :busy="busy"
+              :pending-label="modal === 'trash' ? '正在移入回收站…' : '正在保存…'"
             >
               {{
-                busy
-                  ? '正在保存…'
-                  : modal === 'trash'
-                    ? '移入回收站'
-                    : modal === 'text'
-                      ? '发布到共享空间'
-                      : '确认保存'
+                modal === 'trash' ? '移入回收站' : modal === 'text' ? '发布到共享空间' : '确认保存'
               }}<AppIcon v-if="modal === 'text'" name="send" :size="16" />
-            </button>
+            </PendingButton>
           </footer>
         </form>
         <template v-else-if="preview"

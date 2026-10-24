@@ -4,8 +4,7 @@ const rows = 6;
 </script>
 
 <template>
-  <div class="workspace-skeleton" role="status" aria-live="polite">
-    <span class="visually-hidden">正在加载共享内容…</span>
+  <div class="workspace-skeleton" aria-hidden="true">
     <div v-if="layout === 'grid'" class="items-grid" aria-hidden="true">
       <article v-for="row in rows" :key="row" class="item-card">
         <div class="item-card-preview skeleton-block"></div>
@@ -81,6 +80,7 @@ const rows = 6;
   background: linear-gradient(90deg, transparent, rgb(255 255 255 / 65%), transparent);
   transform: translateX(-100%);
   animation: skeleton-shimmer 1.6s ease-in-out infinite;
+  animation-delay: 180ms;
 }
 .skeleton-check {
   width: 16px;

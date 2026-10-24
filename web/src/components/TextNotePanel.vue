@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue';
 import AppIcon from './AppIcon.vue';
+import PendingButton from './PendingButton.vue';
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -69,9 +70,7 @@ onMounted(() => {
         <button class="button secondary" type="button" :disabled="busy" @click="emit('cancel')">
           取消
         </button>
-        <button class="button primary" :disabled="busy">
-          {{ busy ? '正在保存…' : '保存修改' }}
-        </button>
+        <PendingButton class="primary" type="submit" :busy="busy">保存修改</PendingButton>
       </footer>
     </form>
     <div v-else key="read" class="text-note-view">

@@ -63,7 +63,7 @@ test('network errors and timeout reject with retry instructions', async () => {
   await assert.rejects(network.promise, /检查网络后重试/);
   const timeout = begin();
   timeout.xhr.ontimeout();
-  await assert.rejects(timeout.promise, /上传超时，请点击重试/);
+  await assert.rejects(timeout.promise, /上传超时，结果尚未确认/);
 });
 
 test('disconnect signal aborts the actual HTTP request', async () => {
@@ -79,4 +79,29 @@ test('already aborted requests never send a file', async () => {
   const { promise } = begin({ signal: controller.signal });
   await assert.rejects(promise, { name: 'AbortError' });
   assert.equal(FakeXHR.instances.length, 0);
+});
+
+test('invalid or unknown totals stay indeterminate and byte transfer is distinct from success', async () => {
+  let uploaded = false;
+  const { promise, progress, xhr } = begin({ onUploaded: () => (uploaded = true) });
+  for (const event of [
+    { lengthComputable: false },
+    { lengthComputable: true, loaded: 0, total: 0 },
+    { lengthComputable: true, loaded: 5, total: NaN },
+    { lengthComputable: true, loaded: 11, total: 10 },
+  ]) {
+    xhr.upload.onprogress(event);
+  }
+  assert.deepEqual(progress, [null, null, null, null]);
+  xhr.upload.onprogress({ lengthComputable: true, loaded: 999, total: 1000 });
+  assert.equal(progress.at(-1), 99);
+  xhr.upload.onload();
+  assert.equal(uploaded, true);
+  let complete = false;
+  promise.then(() => (complete = true));
+  await Promise.resolve();
+  assert.equal(complete, false);
+  xhr.respond(201, { id: 'stored' });
+  await promise;
+  assert.equal(complete, true);
 });

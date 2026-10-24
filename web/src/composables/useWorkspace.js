@@ -11,6 +11,7 @@ export function useWorkspace(
   const transfers = ref([]);
   const connection = ref('connecting');
   const loading = ref(false);
+  const refreshing = ref(false);
   const loadError = ref('');
   const pendingStars = ref(new Set());
   let events;
@@ -24,6 +25,7 @@ export function useWorkspace(
   async function refresh() {
     const currentGeneration = generation;
     const sequence = ++refreshSequence;
+    refreshing.value = Boolean(user.value && !loading.value);
     const isCurrent = () =>
       currentGeneration === generation && sequence === refreshSequence && user.value;
     try {
@@ -34,6 +36,11 @@ export function useWorkspace(
       loadError.value = '';
     } catch (error) {
       if (isCurrent()) loadError.value = error.message;
+    } finally {
+      if (currentGeneration === generation && sequence === refreshSequence) {
+        refreshing.value = false;
+        loading.value = false;
+      }
     }
   }
 
@@ -43,7 +50,6 @@ export function useWorkspace(
     loading.value = true;
     await refresh();
     if (currentGeneration !== generation || !user.value) return;
-    loading.value = false;
     events?.close();
     events = createEventSource('/api/events');
     events.onopen = () => (connection.value = 'online');
@@ -67,6 +73,7 @@ export function useWorkspace(
     pendingStars.value.clear();
     loadError.value = '';
     loading.value = false;
+    refreshing.value = false;
   }
 
   async function toggleStar(item) {
@@ -100,14 +107,38 @@ export function useWorkspace(
     running++;
     task.status = 'uploading';
     task.attempts++;
+    const attempt = task.attempts;
     try {
-      await sendFile(task.file, task.parent, (value) => (task.progress = value), {
-        signal: controller.signal,
-      });
+      await sendFile(
+        task.file,
+        task.parent,
+        (value) => {
+          if (
+            taskGeneration !== generation ||
+            task.attempts !== attempt ||
+            task.status !== 'uploading'
+          )
+            return;
+          task.progress = value;
+        },
+        {
+          signal: controller.signal,
+          onUploaded: () => {
+            if (
+              taskGeneration !== generation ||
+              task.attempts !== attempt ||
+              task.status !== 'uploading'
+            )
+              return;
+            task.progress = 100;
+            task.status = 'processing';
+          },
+        },
+      );
       if (taskGeneration !== generation) return;
       task.status = 'done';
       task.progress = 100;
-      await refresh();
+      void refresh();
     } catch (error) {
       if (taskGeneration !== generation) return;
       task.status = 'error';
@@ -163,7 +194,7 @@ export function useWorkspace(
   }
 
   const activeTransfers = computed(() =>
-    transfers.value.filter((task) => ['waiting', 'uploading'].includes(task.status)),
+    transfers.value.filter((task) => ['waiting', 'uploading', 'processing'].includes(task.status)),
   );
 
   const failedTransfers = computed(() => transfers.value.filter((task) => task.status === 'error'));
@@ -175,6 +206,7 @@ export function useWorkspace(
     transfers,
     connection,
     loading,
+    refreshing,
     loadError,
     pendingStars,
     toggleStar,
