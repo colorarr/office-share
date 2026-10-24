@@ -1077,6 +1077,9 @@ kbd {
   color: var(--muted);
   margin-top: 5px;
   display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .empty-state {
   display: flex;

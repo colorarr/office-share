@@ -12,30 +12,37 @@ export function useWorkspace(
   const connection = ref('connecting');
   const loading = ref(false);
   const loadError = ref('');
+  const pendingStars = ref(new Set());
   let events;
   let refreshTimer;
   let running = 0;
   let generation = 0;
+  let refreshSequence = 0;
   const pending = [];
   const controllers = new Map();
 
   async function refresh() {
     const currentGeneration = generation;
+    const sequence = ++refreshSequence;
+    const isCurrent = () =>
+      currentGeneration === generation && sequence === refreshSequence && user.value;
     try {
       const [files, stats] = await Promise.all([client.items(), client.overview()]);
-      if (currentGeneration !== generation || !user.value) return;
+      if (!isCurrent()) return;
       items.value = files;
       overview.value = stats;
       loadError.value = '';
     } catch (error) {
-      loadError.value = error.message;
+      if (isCurrent()) loadError.value = error.message;
     }
   }
 
   async function connect(account) {
+    const currentGeneration = generation;
     user.value = account;
     loading.value = true;
     await refresh();
+    if (currentGeneration !== generation || !user.value) return;
     loading.value = false;
     events?.close();
     events = createEventSource('/api/events');
@@ -57,6 +64,26 @@ export function useWorkspace(
     for (const controller of controllers.values()) controller.abort();
     controllers.clear();
     transfers.value = [];
+    pendingStars.value.clear();
+    loadError.value = '';
+    loading.value = false;
+  }
+
+  async function toggleStar(item) {
+    if (!user.value || pendingStars.value.has(item.id)) return false;
+    const currentGeneration = generation;
+    pendingStars.value.add(item.id);
+    try {
+      await client.update(item.id, { action: 'star', starred: !item.starred });
+      if (currentGeneration !== generation) return false;
+      await refresh();
+      return true;
+    } catch (error) {
+      if (currentGeneration === generation) notify(error.message, 'error');
+      return false;
+    } finally {
+      if (currentGeneration === generation) pendingStars.value.delete(item.id);
+    }
   }
 
   function processQueue() {
@@ -149,6 +176,8 @@ export function useWorkspace(
     connection,
     loading,
     loadError,
+    pendingStars,
+    toggleStar,
     activeTransfers,
     failedTransfers,
     refresh,

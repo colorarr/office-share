@@ -66,17 +66,18 @@ type attempt struct {
 	until time.Time
 }
 type App struct {
-	DB       *sql.DB
-	Data     string
-	BaseURL  string
-	Web      string
-	secure   bool
-	mu       sync.Mutex
-	clients  map[string]client
-	limits   map[string]attempt
-	uploads  chan struct{}
-	quotaMu  sync.Mutex
-	reserved int64
+	DB      *sql.DB
+	Data    string
+	BaseURL string
+	Web     string
+	secure  bool
+	mu      sync.Mutex
+	clients map[string]client
+	limits  map[string]attempt
+	logins  chan struct{}
+	uploads chan struct{}
+	quotaMu sync.Mutex
+	starMu  sync.Mutex
 }
 type userKey struct{}
 
@@ -191,7 +192,7 @@ func New(data, web, baseURL, dsn, adminPassword string) (*App, error) {
 		db.Close()
 		return nil, err
 	}
-	return &App{DB: db, Data: data, Web: web, BaseURL: strings.TrimRight(baseURL, "/"), secure: strings.HasPrefix(baseURL, "https://"), clients: map[string]client{}, limits: map[string]attempt{}, uploads: make(chan struct{}, 8)}, nil
+	return &App{DB: db, Data: data, Web: web, BaseURL: strings.TrimRight(baseURL, "/"), secure: strings.HasPrefix(baseURL, "https://"), clients: map[string]client{}, limits: map[string]attempt{}, logins: make(chan struct{}, 8), uploads: make(chan struct{}, 8)}, nil
 }
 
 func (a *App) Handler() http.Handler {
@@ -285,6 +286,13 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &input) {
 		return
 	}
+	select {
+	case a.logins <- struct{}{}:
+		defer func() { <-a.logins }()
+	default:
+		fail(w, 429, "当前登录请求较多，请稍后重试")
+		return
+	}
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if net.ParseIP(ip).IsLoopback() {
 		if x := r.Header.Get("X-Real-IP"); x != "" {
@@ -292,8 +300,23 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.mu.Lock()
+	if len(a.limits) > 10000 {
+		for k, v := range a.limits {
+			if time.Now().After(v.until) {
+				delete(a.limits, k)
+			}
+		}
+	}
 	v := a.limits[ip]
-	blocked := v.count >= 10 && time.Now().Before(v.until)
+	if !time.Now().Before(v.until) {
+		v = attempt{until: time.Now().Add(15 * time.Minute)}
+	}
+	blocked := v.count >= 10
+	if !blocked {
+		// Reserve before database/bcrypt work, not after a failed comparison.
+		v.count++
+		a.limits[ip] = v
+	}
 	a.mu.Unlock()
 	if blocked {
 		fail(w, 429, "尝试次数较多，请 15 分钟后重试")
@@ -303,21 +326,6 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	var hash string
 	err := a.DB.QueryRowContext(r.Context(), "SELECT id,username,name,role,password FROM users WHERE username=?", strings.TrimSpace(input.Username)).Scan(&u.ID, &u.Username, &u.Name, &u.Role, &hash)
 	if err != nil || len(input.Password) > 72 || bcrypt.CompareHashAndPassword([]byte(hash), []byte(input.Password)) != nil {
-		a.mu.Lock()
-		if len(a.limits) > 10000 {
-			for k, v := range a.limits {
-				if time.Now().After(v.until) {
-					delete(a.limits, k)
-				}
-			}
-		}
-		v = a.limits[ip]
-		if time.Now().After(v.until) {
-			v = attempt{until: time.Now().Add(15 * time.Minute)}
-		}
-		v.count++
-		a.limits[ip] = v
-		a.mu.Unlock()
 		fail(w, 401, "账号或密码不正确")
 		return
 	}
@@ -449,9 +457,15 @@ func (a *App) update(w http.ResponseWriter, r *http.Request) {
 		Action  string  `json:"action"`
 		Name    string  `json:"name"`
 		Content *string `json:"content"`
+		Starred *bool   `json:"starred"`
 	}
 	if !decode(w, r, &in) {
 		return
+	}
+	if in.Action == "star" {
+		// Keep legacy toggles atomic as well as supporting explicit target states.
+		a.starMu.Lock()
+		defer a.starMu.Unlock()
 	}
 	u := current(r)
 	i, err := scanItem(a.DB.QueryRow(itemSelect+" WHERE i.id=?", u.ID, r.PathValue("id")))
@@ -462,10 +476,16 @@ func (a *App) update(w http.ResponseWriter, r *http.Request) {
 	action := ""
 	switch in.Action {
 	case "star":
-		if i.Starred {
-			_, err = a.DB.Exec("DELETE FROM stars WHERE user_id=? AND item_id=?", u.ID, i.ID)
-		} else {
-			_, err = a.DB.Exec("INSERT INTO stars (user_id,item_id) VALUES (?,?)", u.ID, i.ID)
+		starred := !i.Starred
+		if in.Starred != nil {
+			starred = *in.Starred
+		}
+		if starred != i.Starred {
+			if starred {
+				_, err = a.DB.Exec("INSERT INTO stars (user_id,item_id) VALUES (?,?)", u.ID, i.ID)
+			} else {
+				_, err = a.DB.Exec("DELETE FROM stars WHERE user_id=? AND item_id=?", u.ID, i.ID)
+			}
 		}
 	case "rename":
 		if !validName(in.Name) {
@@ -516,17 +536,6 @@ func (a *App) upload(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "目标文件夹不存在")
 		return
 	}
-	a.quotaMu.Lock()
-	var used int64
-	_ = a.DB.QueryRow("SELECT COALESCE(SUM(size),0) FROM items WHERE kind IN ('file','image')").Scan(&used)
-	if used+a.reserved+MaxUpload > Quota {
-		a.quotaMu.Unlock()
-		fail(w, 507, "共享空间容量不足，请联系管理员")
-		return
-	}
-	a.reserved += MaxUpload
-	a.quotaMu.Unlock()
-	defer func() { a.quotaMu.Lock(); a.reserved -= MaxUpload; a.quotaMu.Unlock() }()
 	r.Body = http.MaxBytesReader(w, r.Body, MaxUpload+(1<<20))
 	reader, err := r.MultipartReader()
 	if err != nil {
@@ -591,7 +600,23 @@ func (a *App) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	u := current(r)
 	now := time.Now().UnixMilli()
-	_, err = a.DB.Exec("INSERT INTO items (id,name,kind,parent,content,mime,size,owner_id,created,updated,deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)", id, name, kind, parent, "", mt, size, u.ID, now, now)
+	// Serialize the actual-size check and metadata commit. In-flight temporary
+	// files remain bounded by the eight-upload limit and MaxUpload per file.
+	a.quotaMu.Lock()
+	var used int64
+	err = a.DB.QueryRowContext(r.Context(), "SELECT COALESCE(SUM(size),0) FROM items WHERE kind IN ('file','image')").Scan(&used)
+	if err != nil {
+		a.quotaMu.Unlock()
+		fail(w, 500, "读取空间容量失败，请重试")
+		return
+	}
+	if size > Quota-used {
+		a.quotaMu.Unlock()
+		fail(w, 507, "共享空间容量不足，请联系管理员")
+		return
+	}
+	_, err = a.DB.ExecContext(r.Context(), "INSERT INTO items (id,name,kind,parent,content,mime,size,owner_id,created,updated,deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)", id, name, kind, parent, "", mt, size, u.ID, now, now)
+	a.quotaMu.Unlock()
 	if err != nil {
 		fail(w, 500, "保存文件信息失败")
 		return

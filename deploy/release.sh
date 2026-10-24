@@ -14,6 +14,23 @@ find "$release" -type d -exec chmod 755 {} +
 find "$release" -type f -exec chmod 644 {} +
 chmod 755 "$release/office-share" "$release"/deploy/*.sh
 chown -R root:root "$release"
+# Cover every failure after switching, including restart failures under set -e.
+rollback() {
+  status=$?
+  trap - ERR
+  if [[ -n "$previous" ]]; then
+    if ln -sfn "$previous" /opt/office-share/current &&
+       install -m 644 "$previous/deploy/office-share.service" /etc/systemd/system/office-share.service &&
+       systemctl daemon-reload && systemctl restart office-share; then
+      printf 'Previous release and service unit restored.\n' >&2
+    else
+      printf 'Rollback failed; check the service manually.\n' >&2
+    fi
+  fi
+  printf 'Release failed.\n' >&2
+  exit "$status"
+}
+trap rollback ERR
 ln -sfn "$release" /opt/office-share/current
 install -m 644 "$release/deploy/office-share.service" /etc/systemd/system/office-share.service
 systemctl daemon-reload
@@ -24,11 +41,8 @@ for attempt in $(seq 1 20); do
   sleep 1
 done
 if [[ "$healthy" != true ]]; then
-  if [[ -n "$previous" ]]; then
-    ln -sfn "$previous" /opt/office-share/current
-    systemctl restart office-share
-  fi
-  printf 'New release failed health checks; previous link restored when available.\n' >&2
-  exit 1
+  printf 'New release failed health checks.\n' >&2
+  false
 fi
+trap - ERR
 printf 'Healthy release: %s\n' "$release"

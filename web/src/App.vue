@@ -4,8 +4,10 @@ import AppIcon from './components/AppIcon.vue';
 import FileMark from './components/FileMark.vue';
 import DocumentPreview from './components/DocumentPreview.vue';
 import TextNotePanel from './components/TextNotePanel.vue';
+import WorkspaceSkeleton from './components/WorkspaceSkeleton.vue';
 import { api } from './api/client';
 import { useWorkspace } from './composables/useWorkspace';
+import { useItemPreview } from './composables/useItemPreview';
 import { sizeLabel, dateLabel, fileType } from './utils/format';
 import { compareItems, itemUpdatedAt } from './utils/item-order';
 import { nameClipboardFiles } from './utils/clipboard-files';
@@ -26,6 +28,8 @@ const {
   connection,
   loading,
   loadError,
+  pendingStars,
+  toggleStar,
   activeTransfers,
   failedTransfers,
   retryUpload,
@@ -54,7 +58,7 @@ const modal = ref(null);
 const form = ref({});
 const formError = ref('');
 const members = ref([]);
-const preview = ref(null);
+const preview = useItemPreview(items);
 const rowMenu = ref(null);
 let rowMenuTrigger;
 let dialogTrigger;
@@ -319,14 +323,6 @@ async function saveModal() {
     busy.value = false;
   }
 }
-async function toggleStar(item) {
-  try {
-    await api.update(item.id, { action: 'star' });
-    await refresh();
-  } catch (error) {
-    notify(error.message, 'error');
-  }
-}
 async function restore(item) {
   try {
     await api.update(item.id, { action: 'restore' });
@@ -502,7 +498,10 @@ onMounted(async () => {
   document.addEventListener('keydown', onKey);
   window.addEventListener('session-expired', expired);
   try {
-    await connect(await api.me());
+    const connecting = connect(await api.me());
+    // Show the authenticated shell while the first list request is in flight.
+    initializing.value = false;
+    await connecting;
     openLinkedItem();
   } catch {
     /* 未登录时显示登录页。 */
@@ -754,7 +753,7 @@ onUnmounted(() => {
               </button>
             </div>
           </section>
-          <section class="files-section">
+          <section class="files-section" :aria-busy="loading">
             <div class="files-heading">
               <div v-if="parent" class="breadcrumbs">
                 <button @click="enterFolder()">团队共享</button
@@ -766,7 +765,7 @@ onUnmounted(() => {
               </div>
               <h2 v-else>
                 {{ query ? '搜索结果' : view === 'trash' ? '已删除的内容' : '共享内容'
-                }}<span>{{ filtered.length }}</span>
+                }}<span>{{ loading ? '—' : filtered.length }}</span>
               </h2>
               <div class="files-controls">
                 <button
@@ -810,7 +809,7 @@ onUnmounted(() => {
                     selection = [];
                   "
                 >
-                  {{ entry.label }}<span>{{ entry.count }}</span>
+                  {{ entry.label }}<span>{{ loading ? '—' : entry.count }}</span>
                 </button>
               </div>
               <div class="global-search">
@@ -830,9 +829,7 @@ onUnmounted(() => {
                 <AppIcon name="trash" :size="16" />移入回收站</button
               ><button class="text-button quiet" @click="selection = []">取消选择</button>
             </div>
-            <div v-if="loading" class="loading-state">
-              <span class="spinner"></span>正在整理共享内容…
-            </div>
+            <WorkspaceSkeleton v-if="loading" :layout="layout" />
             <div v-else-if="!filtered.length" class="empty-state">
               <span
                 ><AppIcon
@@ -948,6 +945,7 @@ onUnmounted(() => {
                           ><button
                             class="icon-button star-button"
                             :class="{ starred: item.starred }"
+                            :disabled="pendingStars.has(item.id)"
                             :aria-pressed="item.starred"
                             :aria-label="
                               item.starred ? `取消收藏 ${item.name}` : `收藏 ${item.name}`
@@ -1031,11 +1029,14 @@ onUnmounted(() => {
                 <div class="item-card-details">
                   <button @click="openItem(item)">
                     <strong>{{ item.name }}</strong
-                    ><small>{{ item.owner }} · {{ dateLabel(itemUpdatedAt(item)) }}</small></button
+                    ><small :title="`${item.owner} · ${dateLabel(itemUpdatedAt(item))}`"
+                      >{{ item.owner }} · {{ dateLabel(itemUpdatedAt(item)) }}</small
+                    ></button
                   ><button
                     v-if="view !== 'trash'"
                     class="icon-button star-button"
                     :class="{ starred: item.starred }"
+                    :disabled="pendingStars.has(item.id)"
                     :aria-pressed="item.starred"
                     :aria-label="item.starred ? `取消收藏 ${item.name}` : `收藏 ${item.name}`"
                     :title="item.starred ? '取消收藏' : '收藏'"
@@ -1063,7 +1064,7 @@ onUnmounted(() => {
               </article>
             </div>
             <div class="list-footer">
-              <span>共 {{ filtered.length }} 项内容</span
+              <span>{{ loading ? '正在加载共享内容…' : `共 ${filtered.length} 项内容` }}</span
               ><span><AppIcon name="lock" :size="13" />仅团队成员可见</span>
             </div>
           </section>
@@ -1265,6 +1266,7 @@ onUnmounted(() => {
       </button>
       <button
         role="menuitem"
+        :disabled="pendingStars.has(rowMenu.item.id)"
         @click="
           toggleStar(rowMenu.item);
           rowMenu = null;

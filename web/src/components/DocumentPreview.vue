@@ -13,8 +13,15 @@ const document = ref(null);
 const reload = ref(0);
 
 watch(
-  [() => props.item, reload],
-  async ([item], _previous, onCleanup) => {
+  [
+    () => props.item.id,
+    () => props.item.name,
+    () => props.item.mime,
+    () => props.item.size,
+    reload,
+  ],
+  async (_values, _previous, onCleanup) => {
+    const item = props.item;
     document.value = null;
     error.value = '';
     loading.value = false;
