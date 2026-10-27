@@ -398,6 +398,11 @@ func (a *App) list(w http.ResponseWriter, r *http.Request) {
 
 // parentValid also checks ancestors so trashed directories hide their descendants.
 func (a *App) parentValid(id string) bool {
+	return a.parentAvailable(id, false)
+}
+
+// Image previews may include trashed folders, but still require an intact folder chain.
+func (a *App) parentAvailable(id string, includeTrashed bool) bool {
 	seen := map[string]bool{}
 	for id != "" {
 		if seen[id] {
@@ -407,7 +412,7 @@ func (a *App) parentValid(id string) bool {
 		var parent, kind string
 		var deleted bool
 		err := a.DB.QueryRow("SELECT parent,kind,deleted FROM items WHERE id=?", id).Scan(&parent, &kind, &deleted)
-		if err != nil || deleted || kind != "folder" {
+		if err != nil || (deleted && !includeTrashed) || kind != "folder" {
 			return false
 		}
 		id = parent
@@ -629,7 +634,10 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 	var name, mt, kind, parent string
 	var deleted bool
 	err := a.DB.QueryRow("SELECT name,mime,kind,parent,deleted FROM items WHERE id=?", r.PathValue("id")).Scan(&name, &mt, &kind, &parent, &deleted)
-	if err != nil || deleted || !a.parentValid(parent) || (kind != "image" && kind != "file") {
+	imagePreview := r.URL.Query().Get("preview") == "1" && kind == "image"
+	// Authenticated members can inspect recycle-bin images before restoring them.
+	// Normal downloads and non-image files keep the existing trash restrictions.
+	if err != nil || (deleted && !imagePreview) || !a.parentAvailable(parent, imagePreview) || (kind != "image" && kind != "file") {
 		fail(w, 404, "文件不存在或已移入回收站")
 		return
 	}
@@ -645,7 +653,7 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	disposition := "attachment"
-	if r.URL.Query().Get("preview") == "1" && kind == "image" {
+	if imagePreview {
 		disposition = "inline"
 	}
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": name}))
