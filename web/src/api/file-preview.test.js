@@ -44,3 +44,14 @@ test('permission and missing-file errors are readable and retryable', async () =
     new Response(JSON.stringify({ error: '请先登录' }), { status: 401 });
   await assert.rejects(readTextPreview({ id: 'private', size: 1 }), /请先登录/);
 });
+
+test('preview-only recipients use the restricted text endpoint, never original-byte Range', async () => {
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, '/api/items/restricted/preview');
+    assert.equal(options.headers, undefined);
+    return Response.json({ text: '受限预览', truncated: true });
+  };
+  const result = await readTextPreview({ id: 'restricted', capabilities: { download: false } });
+  assert.equal(result.content, '受限预览');
+  assert.equal(result.truncated, true);
+});

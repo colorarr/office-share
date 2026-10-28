@@ -6,6 +6,7 @@ import PendingButton from './PendingButton.vue';
 const props = defineProps({
   item: { type: Object, required: true },
   editing: { type: Boolean, default: false },
+  canEdit: { type: Boolean, default: true },
   modelValue: { type: String, default: '' },
   busy: { type: Boolean, default: false },
   error: { type: String, default: '' },
@@ -79,7 +80,7 @@ onMounted(() => {
         <button class="button secondary" @click="emit('copy-link')">
           <AppIcon name="link" :size="17" />复制链接
         </button>
-        <button ref="editButton" class="button secondary" @click="emit('edit')">
+        <button v-if="canEdit" ref="editButton" class="button secondary" @click="emit('edit')">
           <AppIcon name="edit" :size="17" />编辑
         </button>
         <button class="button primary" @click="emit('copy', item.content)">

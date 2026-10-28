@@ -1,16 +1,12 @@
 <script setup>
+import { computed } from 'vue';
 import AppIcon from './AppIcon.vue';
-import { fileType } from '../utils/format';
-defineProps({ item: { type: Object, required: true }, large: Boolean });
+import { fileVisualKind } from '../utils/file-presentation.js';
+const props = defineProps({ item: { type: Object, required: true }, large: Boolean });
+const kind = computed(() => fileVisualKind(props.item));
 </script>
-
 <template>
-  <span class="file-mark" :class="[item.kind, { large }]">
-    <AppIcon
-      v-if="item.kind === 'folder' || item.kind === 'image' || item.kind === 'text'"
-      :name="item.kind"
-      :size="large ? 29 : 22"
-    />
-    <span v-else>{{ fileType(item).slice(0, 4) }}</span>
+  <span class="file-icon" :class="[kind, { large }]">
+    <AppIcon :name="kind === 'pdf' ? 'file' : kind" />
   </span>
 </template>

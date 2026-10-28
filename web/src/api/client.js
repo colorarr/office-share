@@ -14,10 +14,12 @@ export async function request(path, options = {}) {
     throw new Error('网络响应异常，请稍后重试');
   }
   if (!response.ok) {
-    if (response.status === 401 && path !== '/login') {
+    if (response.status === 401 && path !== '/login' && !path.startsWith('/shared/')) {
       window.dispatchEvent(new Event('session-expired'));
     }
-    throw new Error(data.error || '请求失败，请重试');
+    const error = new Error(data.error || '请求失败，请重试');
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
@@ -26,8 +28,9 @@ export const api = {
   me: () => request('/me'),
   login: (data) => request('/login', { method: 'POST', body: JSON.stringify(data) }),
   logout: () => request('/logout', { method: 'POST' }),
-  items: () => request('/items'),
-  overview: () => request('/overview'),
+  item: (id) => request(`/items/${encodeURIComponent(id)}`),
+  items: (space = 'team') => request(`/items?space=${encodeURIComponent(space)}`),
+  overview: (space = 'team') => request(`/overview?space=${encodeURIComponent(space)}`),
   create: (data) => request('/items', { method: 'POST', body: JSON.stringify(data) }),
   update: (id, data) => request(`/items/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   members: () => request('/members'),
@@ -35,7 +38,12 @@ export const api = {
   password: (data) => request('/password', { method: 'POST', body: JSON.stringify(data) }),
 };
 
-export function uploadFile(file, parent, progress, { signal, onUploaded = () => {} } = {}) {
+export function uploadFile(
+  file,
+  parent,
+  progress,
+  { signal, onUploaded = () => {}, space, uploadID } = {},
+) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const abort = () => xhr.abort();
@@ -48,7 +56,14 @@ export function uploadFile(file, parent, progress, { signal, onUploaded = () => 
       cleanup();
       reject(error);
     };
-    xhr.open('POST', `/api/upload?parent=${encodeURIComponent(parent)}`);
+    xhr.open(
+      'POST',
+      `/api/upload?parent=${encodeURIComponent(parent)}${space ? `&space=${encodeURIComponent(space)}` : ''}`,
+    );
+    if (uploadID) {
+      xhr.setRequestHeader('X-Upload-ID', uploadID);
+      xhr.setRequestHeader('X-File-Size', String(file.size));
+    }
     xhr.timeout = 30 * 60 * 1000;
     xhr.upload.onprogress = (event) => {
       if (

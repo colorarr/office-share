@@ -6,6 +6,7 @@ export function useWorkspace(
   { client = api, sendFile = uploadFile, createEventSource = (url) => new EventSource(url) } = {},
 ) {
   const user = ref(null);
+  const space = ref('team');
   const items = ref([]);
   const overview = ref({ used: 0, quota: 10 * 1024 ** 3, online: 0, members: 0, activity: [] });
   const transfers = ref([]);
@@ -13,6 +14,7 @@ export function useWorkspace(
   const loading = ref(false);
   const refreshing = ref(false);
   const loadError = ref('');
+  const accessDenied = ref(false);
   const pendingStars = ref(new Set());
   let events;
   let refreshTimer;
@@ -29,13 +31,24 @@ export function useWorkspace(
     const isCurrent = () =>
       currentGeneration === generation && sequence === refreshSequence && user.value;
     try {
-      const [files, stats] = await Promise.all([client.items(), client.overview()]);
+      const [files, stats] = await Promise.all([
+        client.items(space.value),
+        client.overview(space.value),
+      ]);
       if (!isCurrent()) return;
       items.value = files;
       overview.value = stats;
       loadError.value = '';
+      accessDenied.value = false;
     } catch (error) {
-      if (isCurrent()) loadError.value = error.message;
+      if (isCurrent()) {
+        loadError.value = error.message;
+        if ([403, 404].includes(error.status)) {
+          accessDenied.value = true;
+          items.value = [];
+          overview.value = {};
+        }
+      }
     } finally {
       if (currentGeneration === generation && sequence === refreshSequence) {
         refreshing.value = false;
@@ -123,6 +136,8 @@ export function useWorkspace(
         },
         {
           signal: controller.signal,
+          space: task.space,
+          uploadID: task.id,
           onUploaded: () => {
             if (
               taskGeneration !== generation ||
@@ -141,9 +156,9 @@ export function useWorkspace(
       void refresh();
     } catch (error) {
       if (taskGeneration !== generation) return;
-      task.status = 'error';
+      task.status = error.name === 'AbortError' ? 'cancelled' : 'error';
       task.error = error.message;
-      notify(`${task.name}：${error.message}`, 'error');
+      if (task.status === 'error') notify(`${task.name}：${error.message}`, 'error');
     } finally {
       controllers.delete(task.id);
       running--;
@@ -152,7 +167,12 @@ export function useWorkspace(
   }
 
   function retryUpload(task) {
-    if (!user.value || !transfers.value.includes(task) || task.status !== 'error') return false;
+    if (
+      !user.value ||
+      !transfers.value.includes(task) ||
+      !['error', 'cancelled'].includes(task.status)
+    )
+      return false;
     task.error = '';
     task.progress = 0;
     task.status = 'waiting';
@@ -168,7 +188,9 @@ export function useWorkspace(
   }
 
   function clearCompleted() {
-    transfers.value = transfers.value.filter((task) => task.status !== 'done');
+    transfers.value = transfers.value.filter(
+      (task) => !['done', 'cancelled'].includes(task.status),
+    );
   }
 
   function upload(files, parent = '') {
@@ -181,6 +203,7 @@ export function useWorkspace(
         id: crypto.randomUUID(),
         file,
         parent,
+        space: space.value,
         name: file.name,
         progress: 0,
         status: 'waiting',
@@ -193,6 +216,23 @@ export function useWorkspace(
     processQueue();
   }
 
+  function cancelUpload(task) {
+    if (!transfers.value.includes(task)) return;
+    if (task.status === 'waiting') {
+      const index = pending.indexOf(task);
+      if (index >= 0) pending.splice(index, 1);
+      task.status = 'cancelled';
+    } else if (['uploading', 'processing'].includes(task.status)) {
+      controllers.get(task.id)?.abort();
+    }
+  }
+
+  async function changeSpace(id) {
+    space.value = id;
+    items.value = [];
+    await refresh();
+  }
+
   const activeTransfers = computed(() =>
     transfers.value.filter((task) => ['waiting', 'uploading', 'processing'].includes(task.status)),
   );
@@ -201,6 +241,10 @@ export function useWorkspace(
 
   return {
     user,
+    accessDenied,
+    space,
+    changeSpace,
+    cancelUpload,
     items,
     overview,
     transfers,

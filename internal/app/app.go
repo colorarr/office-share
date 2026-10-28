@@ -11,13 +11,13 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,21 +35,25 @@ type User struct {
 	Username string `json:"username"`
 	Name     string `json:"name"`
 	Role     string `json:"role"`
+	Disabled bool   `json:"disabled"`
 }
 type Item struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Parent  string `json:"parent"`
-	Content string `json:"content"`
-	MIME    string `json:"mime"`
-	Size    int64  `json:"size"`
-	Owner   string `json:"owner"`
-	OwnerID string `json:"ownerId"`
-	Created int64  `json:"created"`
-	Updated int64  `json:"updated"`
-	Deleted bool   `json:"deleted"`
-	Starred bool   `json:"starred"`
+	ID           string       `json:"id"`
+	Name         string       `json:"name"`
+	Kind         string       `json:"kind"`
+	Parent       string       `json:"parent"`
+	Content      string       `json:"content"`
+	MIME         string       `json:"mime"`
+	Size         int64        `json:"size"`
+	Owner        string       `json:"owner"`
+	OwnerID      string       `json:"ownerId"`
+	Created      int64        `json:"created"`
+	Updated      int64        `json:"updated"`
+	Deleted      bool         `json:"deleted"`
+	Starred      bool         `json:"starred"`
+	SpaceID      string       `json:"spaceId"`
+	Capabilities Capabilities `json:"capabilities"`
+	SHA256       string       `json:"sha256,omitempty"`
 }
 type Activity struct {
 	Name    string `json:"name"`
@@ -66,18 +70,21 @@ type attempt struct {
 	until time.Time
 }
 type App struct {
-	DB      *sql.DB
-	Data    string
-	BaseURL string
-	Web     string
-	secure  bool
-	mu      sync.Mutex
-	clients map[string]client
-	limits  map[string]attempt
-	logins  chan struct{}
-	uploads chan struct{}
-	quotaMu sync.Mutex
-	starMu  sync.Mutex
+	DB                *sql.DB
+	Data              string
+	BaseURL           string
+	Web               string
+	secure            bool
+	mu                sync.Mutex
+	clients           map[string]client
+	limits            map[string]attempt
+	logins            chan struct{}
+	uploads           chan struct{}
+	quotaMu           sync.Mutex
+	starMu            sync.Mutex
+	accessMu          sync.Mutex
+	userUploads       map[string]*uploadQueue
+	sharePreviewSlots chan struct{}
 }
 type userKey struct{}
 
@@ -147,6 +154,10 @@ func New(data, web, baseURL, dsn, adminPassword string) (*App, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = migrateSpaces(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	var n int
 	if err = db.QueryRow("SELECT COUNT(*) FROM users").Scan(&n); err != nil {
 		return nil, err
@@ -192,6 +203,14 @@ func New(data, web, baseURL, dsn, adminPassword string) (*App, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = recoverUploads(db, data); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = ensureUserSpaces(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &App{DB: db, Data: data, Web: web, BaseURL: strings.TrimRight(baseURL, "/"), secure: strings.HasPrefix(baseURL, "https://"), clients: map[string]client{}, limits: map[string]attempt{}, logins: make(chan struct{}, 8), uploads: make(chan struct{}, 8)}, nil
 }
 
@@ -209,6 +228,28 @@ func (a *App) Handler() http.Handler {
 	routes := map[string]http.HandlerFunc{
 		"POST /api/logout": a.logout, "GET /api/items": a.list, "POST /api/items": a.create, "PATCH /api/items/{id}": a.update, "POST /api/upload": a.upload, "GET /api/files/{id}": a.download, "GET /api/events": a.events, "GET /api/overview": a.overview, "GET /api/members": a.members, "POST /api/members": a.addMember, "POST /api/password": a.password,
 	}
+	routes["GET /api/spaces"] = a.listSpaces
+	routes["GET /api/items/{id}"] = a.getItem
+	routes["GET /api/items/{id}/preview"] = a.itemPreview
+	routes["POST /api/spaces"] = a.createSpace
+	routes["GET /api/pins"] = a.pins
+	routes["PUT /api/pins"] = a.pins
+	routes["GET /api/preferences"] = a.preferences
+	routes["PUT /api/preferences"] = a.preferences
+	routes["GET /api/spaces/{space}/members"] = a.spaceMembers
+	routes["PUT /api/spaces/{space}/members/{user}"] = a.spaceMembers
+	routes["DELETE /api/spaces/{space}/members/{user}"] = a.spaceMembers
+	routes["PATCH /api/members/{id}"] = a.updateMember
+	routes["GET /api/items/{id}/shares"] = a.manageShares
+	routes["POST /api/items/{id}/shares"] = a.manageShares
+	routes["DELETE /api/shares/{id}"] = a.revokeShare
+	routes["GET /api/shared-with-me"] = a.sharedWithMe
+	routes["POST /api/items/{id}/copy"] = a.copyItem
+	routes["GET /api/uploads/{id}"] = a.uploadStatus
+	mux.HandleFunc("GET /api/shared/{token}", a.shared)
+	mux.HandleFunc("GET /api/shared/{token}/items/{item}", a.shared)
+	mux.HandleFunc("GET /api/shared/{token}/items/{item}/content", a.shared)
+	mux.HandleFunc("GET /api/shared/{token}/items/{item}/preview", a.shared)
 	for pattern, h := range routes {
 		mux.Handle(pattern, a.auth(h))
 	}
@@ -236,7 +277,7 @@ func (a *App) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "same-origin")
+		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
@@ -244,8 +285,12 @@ func (a *App) Handler() http.Handler {
 		if r.Method != "GET" && r.Method != "HEAD" {
 			if origin := r.Header.Get("Origin"); origin != "" {
 				u, e := url.Parse(origin)
-				expected, _ := url.Parse(a.BaseURL)
-				if e != nil || (u.Host != r.Host && (expected == nil || origin != a.BaseURL)) {
+				if e != nil || (origin != a.BaseURL && (u.Host != r.Host || u.Scheme != func() string {
+					if r.TLS != nil {
+						return "https"
+					}
+					return "http"
+				}())) {
 					fail(w, 403, "请求来源不匹配")
 					return
 				}
@@ -263,13 +308,7 @@ func (a *App) Handler() http.Handler {
 
 func (a *App) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie("office_session")
-		if err != nil {
-			fail(w, 401, "请先登录")
-			return
-		}
-		var u User
-		err = a.DB.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.name,u.role FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>?`, digest(c.Value), time.Now().Unix()).Scan(&u.ID, &u.Username, &u.Name, &u.Role)
+		u, err := a.lookupUser(r)
 		if err != nil {
 			fail(w, 401, "登录已过期，请重新登录")
 			return
@@ -324,7 +363,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	}
 	var u User
 	var hash string
-	err := a.DB.QueryRowContext(r.Context(), "SELECT id,username,name,role,password FROM users WHERE username=?", strings.TrimSpace(input.Username)).Scan(&u.ID, &u.Username, &u.Name, &u.Role, &hash)
+	err := a.DB.QueryRowContext(r.Context(), "SELECT id,username,name,role,password FROM users WHERE username=? AND disabled=0", strings.TrimSpace(input.Username)).Scan(&u.ID, &u.Username, &u.Name, &u.Role, &hash)
 	if err != nil || len(input.Password) > 72 || bcrypt.CompareHashAndPassword([]byte(hash), []byte(input.Password)) != nil {
 		fail(w, 401, "账号或密码不正确")
 		return
@@ -370,15 +409,20 @@ func migrateItemUpdates(db *sql.DB) error {
 	return err
 }
 
-const itemSelect = `SELECT i.id,i.name,i.kind,i.parent,i.content,i.mime,i.size,i.owner_id,u.name,i.created,i.updated,i.deleted,CASE WHEN s.item_id IS NULL THEN 0 ELSE 1 END FROM items i JOIN users u ON u.id=i.owner_id LEFT JOIN stars s ON s.item_id=i.id AND s.user_id=?`
+const itemSelect = `SELECT i.id,i.name,i.kind,i.parent,i.content,i.mime,i.size,i.owner_id,u.name,i.created,i.updated,i.deleted,CASE WHEN s.item_id IS NULL THEN 0 ELSE 1 END,i.space_id,i.sha256 FROM items i JOIN users u ON u.id=i.owner_id LEFT JOIN stars s ON s.item_id=i.id AND s.user_id=?`
 
 func scanItem(row interface{ Scan(...any) error }) (Item, error) {
 	var i Item
-	err := row.Scan(&i.ID, &i.Name, &i.Kind, &i.Parent, &i.Content, &i.MIME, &i.Size, &i.OwnerID, &i.Owner, &i.Created, &i.Updated, &i.Deleted, &i.Starred)
+	err := row.Scan(&i.ID, &i.Name, &i.Kind, &i.Parent, &i.Content, &i.MIME, &i.Size, &i.OwnerID, &i.Owner, &i.Created, &i.Updated, &i.Deleted, &i.Starred, &i.SpaceID, &i.SHA256)
 	return i, err
 }
 func (a *App) list(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.QueryContext(r.Context(), itemSelect+" ORDER BY i.updated DESC, i.created DESC, i.id DESC LIMIT 5000", current(r).ID)
+	sid := requestSpace(r)
+	if a.spaceRole(current(r).ID, sid) == "" {
+		fail(w, 404, "空间不存在")
+		return
+	}
+	rows, err := a.DB.QueryContext(r.Context(), itemSelect+" WHERE i.space_id=? ORDER BY i.updated DESC, i.created DESC, i.id DESC LIMIT 5000", current(r).ID, sid)
 	if err != nil {
 		fail(w, 500, "读取文件失败")
 		return
@@ -392,6 +436,16 @@ func (a *App) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items = append(items, i)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		fail(w, 500, "读取文件失败")
+		return
+	}
+	rows.Close()
+	role := a.spaceRole(current(r).ID, sid)
+	for index := range items {
+		items[index].Capabilities = Capabilities{Read: true, Write: roleWrites(role), Manage: roleManages(role), Download: true}
 	}
 	reply(w, 200, items)
 }
@@ -429,13 +483,27 @@ func (a *App) record(u User, action, target string) {
 	a.broadcast()
 }
 func (a *App) create(w http.ResponseWriter, r *http.Request) {
+	a.accessMu.Lock()
+	defer a.accessMu.Unlock()
 	var in struct {
 		Name    string `json:"name"`
 		Kind    string `json:"kind"`
 		Parent  string `json:"parent"`
 		Content string `json:"content"`
+		Space   string `json:"space"`
 	}
 	if !decode(w, r, &in) {
+		return
+	}
+	if in.Space == "" {
+		in.Space = "team"
+	}
+	if in.Parent != "" && !a.parentValid(in.Parent) {
+		fail(w, 400, "目标文件夹不存在")
+		return
+	}
+	if !a.destination(current(r).ID, in.Space, in.Parent) {
+		fail(w, 403, "当前目录没有创建权限")
 		return
 	}
 	in.Name = strings.TrimSpace(in.Name)
@@ -449,15 +517,23 @@ func (a *App) create(w http.ResponseWriter, r *http.Request) {
 		in.Content = ""
 	}
 	now := time.Now().UnixMilli()
-	_, err := a.DB.Exec("INSERT INTO items (id,name,kind,parent,content,mime,size,owner_id,created,updated,deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)", id, in.Name, in.Kind, in.Parent, in.Content, "text/plain", len(in.Content), u.ID, now, now)
+	var err error
+	in.Name, err = a.uniqueItemName(r.Context(), in.Name, in.Space, in.Parent, "")
+	if err != nil {
+		fail(w, 500, "分配文件名失败")
+		return
+	}
+	_, err = a.DB.Exec("INSERT INTO items (id,name,kind,parent,content,mime,size,owner_id,created,updated,deleted,space_id) VALUES (?,?,?,?,?,?,?,?,?,?,0,?)", id, in.Name, in.Kind, in.Parent, in.Content, "text/plain", len(in.Content), u.ID, now, now, in.Space)
 	if err != nil {
 		fail(w, 500, "保存失败")
 		return
 	}
-	a.record(u, "新建了", in.Name)
+	a.recordInSpace(u, "新建了", in.Name, in.Space)
 	reply(w, 201, map[string]string{"id": id})
 }
 func (a *App) update(w http.ResponseWriter, r *http.Request) {
+	a.accessMu.Lock()
+	defer a.accessMu.Unlock()
 	var in struct {
 		Action  string  `json:"action"`
 		Name    string  `json:"name"`
@@ -478,6 +554,15 @@ func (a *App) update(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "内容不存在")
 		return
 	}
+	if !a.canReadItem(u.ID, i, true) {
+		fail(w, 404, "内容不存在")
+		return
+	}
+	if in.Action != "star" && !roleWrites(a.spaceRole(u.ID, i.SpaceID)) {
+		fail(w, 403, "当前空间为只读")
+		return
+	}
+
 	action := ""
 	switch in.Action {
 	case "star":
@@ -497,9 +582,30 @@ func (a *App) update(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400, "名称须为 1–150 个字符，不含斜线和换行")
 			return
 		}
-		_, err = a.DB.Exec("UPDATE items SET name=?,updated=? WHERE id=?", strings.TrimSpace(in.Name), time.Now().UnixMilli(), i.ID)
+		if i.Kind != "folder" && filepath.Ext(i.Name) != "" && !strings.EqualFold(filepath.Ext(i.Name), filepath.Ext(in.Name)) {
+			fail(w, 400, "请保留原文件扩展名")
+			return
+		}
+		name, e := a.uniqueItemName(r.Context(), strings.TrimSpace(in.Name), i.SpaceID, i.Parent, i.ID)
+		if e != nil {
+			fail(w, 500, "分配名称失败")
+			return
+		}
+		_, err = a.DB.Exec("UPDATE items SET name=?,updated=? WHERE id=?", name, time.Now().UnixMilli(), i.ID)
 		action = "重命名了"
 	case "trash", "restore":
+		if in.Action == "restore" {
+			name, e := a.uniqueItemName(r.Context(), i.Name, i.SpaceID, i.Parent, i.ID)
+			if e != nil {
+				fail(w, 500, "恢复名称失败")
+				return
+			}
+			_, err = a.DB.Exec("UPDATE items SET name=? WHERE id=?", name, i.ID)
+			if err != nil {
+				fail(w, 500, "恢复失败")
+				return
+			}
+		}
 		_, err = a.DB.Exec("UPDATE items SET deleted=?,updated=? WHERE id=?", in.Action == "trash", time.Now().UnixMilli(), i.ID)
 		if in.Action == "trash" {
 			action = "移入回收站："
@@ -522,13 +628,20 @@ func (a *App) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if action != "" {
-		a.record(u, action, i.Name)
+		a.recordInSpace(u, action, i.Name, i.SpaceID)
 	} else {
-		a.broadcast()
+		a.broadcastUser(u.ID)
 	}
 	reply(w, 200, map[string]bool{"ok": true})
 }
 func (a *App) upload(w http.ResponseWriter, r *http.Request) {
+	release, ok := a.acquireUpload(r.Context(), current(r).ID)
+	if !ok {
+		w.Header().Set("Retry-After", "2")
+		fail(w, 429, "当前账号传输较多，请稍后重试")
+		return
+	}
+	defer release()
 	select {
 	case a.uploads <- struct{}{}:
 		defer func() { <-a.uploads }()
@@ -537,6 +650,15 @@ func (a *App) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parent := r.URL.Query().Get("parent")
+	sid := requestSpace(r)
+	if parent != "" && !a.parentValid(parent) {
+		fail(w, 400, "目标文件夹不存在")
+		return
+	}
+	if !a.destination(current(r).ID, sid, parent) {
+		fail(w, 403, "当前目录没有上传权限")
+		return
+	}
 	if !a.parentValid(parent) {
 		fail(w, 400, "目标文件夹不存在")
 		return
@@ -559,6 +681,16 @@ func (a *App) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := token()
+	job, proceed := a.beginUpload(w, r, sid, parent, name, id)
+	if !proceed {
+		return
+	}
+	committedJob := false
+	defer func() {
+		if job != "" && !committedJob {
+			_, _ = a.DB.Exec("UPDATE upload_jobs SET state='failed' WHERE user_id=? AND job_key=? AND state='running'", current(r).ID, job)
+		}
+	}()
 	path := filepath.Join(a.Data, "files", id)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -585,11 +717,13 @@ func (a *App) upload(w http.ResponseWriter, r *http.Request) {
 	case "image/png", "image/jpeg", "image/gif", "image/webp":
 		kind = "image"
 	}
-	if _, err = f.Write(head); err != nil {
+	hasher := sha256.New()
+	writer := io.MultiWriter(f, hasher)
+	if _, err = writer.Write(head); err != nil {
 		fail(w, 500, "磁盘写入失败")
 		return
 	}
-	written, err := io.Copy(f, io.LimitReader(part, MaxUpload-int64(n)+1))
+	written, err := io.Copy(writer, io.LimitReader(part, MaxUpload-int64(n)+1))
 	size := int64(n) + written
 	if err != nil || size > MaxUpload {
 		fail(w, 413, "单个文件请控制在 90 MB 以内")
@@ -603,10 +737,23 @@ func (a *App) upload(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "文件保存失败")
 		return
 	}
+	if job != "" {
+		expected, _ := strconv.ParseInt(r.Header.Get("X-File-Size"), 10, 64)
+		if size != expected {
+			fail(w, 400, "文件实际大小与申报不符")
+			return
+		}
+	}
 	u := current(r)
 	now := time.Now().UnixMilli()
 	// Serialize the actual-size check and metadata commit. In-flight temporary
 	// files remain bounded by the eight-upload limit and MaxUpload per file.
+	a.accessMu.Lock()
+	defer a.accessMu.Unlock()
+	if !a.destination(u.ID, sid, parent) {
+		fail(w, 403, "上传期间目录或权限已变更")
+		return
+	}
 	a.quotaMu.Lock()
 	var used int64
 	err = a.DB.QueryRowContext(r.Context(), "SELECT COALESCE(SUM(size),0) FROM items WHERE kind IN ('file','image')").Scan(&used)
@@ -620,45 +767,53 @@ func (a *App) upload(w http.ResponseWriter, r *http.Request) {
 		fail(w, 507, "共享空间容量不足，请联系管理员")
 		return
 	}
-	_, err = a.DB.ExecContext(r.Context(), "INSERT INTO items (id,name,kind,parent,content,mime,size,owner_id,created,updated,deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)", id, name, kind, parent, "", mt, size, u.ID, now, now)
+	name, err = a.uniqueItemName(r.Context(), name, sid, parent, "")
+	if err == nil {
+		tx, txErr := a.DB.BeginTx(r.Context(), nil)
+		if txErr != nil {
+			err = txErr
+		} else {
+			_, err = tx.ExecContext(r.Context(), "INSERT INTO items (id,name,kind,parent,content,mime,size,owner_id,created,updated,deleted,space_id,sha256) VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?)", id, name, kind, parent, "", mt, size, u.ID, now, now, sid, hex.EncodeToString(hasher.Sum(nil)))
+			if err == nil && job != "" {
+				_, err = tx.ExecContext(r.Context(), "UPDATE upload_jobs SET state='done',item_id=? WHERE user_id=? AND job_key=?", id, u.ID, job)
+			}
+			if err == nil {
+				err = tx.Commit()
+			}
+			if err != nil {
+				_ = tx.Rollback()
+			}
+		}
+	}
+
 	a.quotaMu.Unlock()
 	if err != nil {
 		fail(w, 500, "保存文件信息失败")
 		return
 	}
 	keep = true
-	a.record(u, "上传了", name)
+	committedJob = true
+	a.recordInSpace(u, "上传了", name, sid)
 	reply(w, 201, map[string]string{"id": id})
 }
 func (a *App) download(w http.ResponseWriter, r *http.Request) {
-	var name, mt, kind, parent string
-	var deleted bool
-	err := a.DB.QueryRow("SELECT name,mime,kind,parent,deleted FROM items WHERE id=?", r.PathValue("id")).Scan(&name, &mt, &kind, &parent, &deleted)
-	imagePreview := r.URL.Query().Get("preview") == "1" && kind == "image"
-	// Authenticated members can inspect recycle-bin images before restoring them.
-	// Normal downloads and non-image files keep the existing trash restrictions.
-	if err != nil || (deleted && !imagePreview) || !a.parentAvailable(parent, imagePreview) || (kind != "image" && kind != "file") {
+	item, err := a.item(r.PathValue("id"))
+	inline := r.URL.Query().Get("preview") == "1" && item.Kind == "image"
+	if err != nil || !a.canReadItem(current(r).ID, item, inline) || (!inline && item.Deleted) || item.Kind == "folder" {
 		fail(w, 404, "文件不存在或已移入回收站")
 		return
 	}
-	f, err := os.Open(filepath.Join(a.Data, "files", r.PathValue("id")))
-	if err != nil {
-		fail(w, 404, "文件暂不可用，请联系管理员")
-		return
+	if a.spaceRole(current(r).ID, item.SpaceID) == "" {
+		if inline {
+			a.serveSharedPreview(w, r, item)
+			return
+		}
+		if !a.canDownloadItem(current(r).ID, item) {
+			fail(w, 403, "此资料未开放原文件下载")
+			return
+		}
 	}
-	defer f.Close()
-	stat, err := f.Stat()
-	if err != nil {
-		fail(w, 500, "读取文件失败")
-		return
-	}
-	disposition := "attachment"
-	if imagePreview {
-		disposition = "inline"
-	}
-	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": name}))
-	w.Header().Set("Content-Type", mt)
-	http.ServeContent(w, r, name, stat.ModTime(), f)
+	a.serveOriginal(w, r, item, inline)
 }
 func (a *App) broadcast() {
 	a.mu.Lock()
@@ -710,6 +865,9 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 			_, _ = fmt.Fprint(w, "event: change\ndata: {}\n\n")
 			f.Flush()
 		case <-ticker.C:
+			if _, err := a.lookupUser(r); err != nil {
+				return
+			}
 			cookie, _ := r.Cookie("office_session")
 			var valid int
 			if cookie != nil {
@@ -724,11 +882,16 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (a *App) overview(w http.ResponseWriter, r *http.Request) {
+	sid := requestSpace(r)
+	if a.spaceRole(current(r).ID, sid) == "" {
+		fail(w, 404, "空间不存在")
+		return
+	}
 	var used int64
 	var members int
-	_ = a.DB.QueryRow("SELECT COALESCE(SUM(size),0) FROM items WHERE kind IN ('image','file')").Scan(&used)
-	_ = a.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&members)
-	rows, err := a.DB.Query("SELECT u.name,a.action,a.target,a.created FROM activities a JOIN users u ON u.id=a.user_id ORDER BY a.created DESC LIMIT 8")
+	_ = a.DB.QueryRow("SELECT COALESCE(SUM(size),0) FROM items WHERE space_id=? AND kind IN ('image','file')", sid).Scan(&used)
+	_ = a.DB.QueryRow("SELECT COUNT(*) FROM space_members m JOIN users u ON u.id=m.user_id AND u.disabled=0 WHERE m.space_id=?", sid).Scan(&members)
+	rows, err := a.DB.Query("SELECT u.name,a.action,a.target,a.created FROM activities a JOIN users u ON u.id=a.user_id WHERE a.space_id=? ORDER BY a.created DESC LIMIT 8", sid)
 	if err != nil {
 		fail(w, 500, "读取动态失败")
 		return
@@ -741,17 +904,31 @@ func (a *App) overview(w http.ResponseWriter, r *http.Request) {
 			activity = append(activity, v)
 		}
 	}
+	rows.Close()
 	a.mu.Lock()
 	unique := map[string]bool{}
 	for _, c := range a.clients {
 		unique[c.user] = true
 	}
-	online := len(unique)
 	a.mu.Unlock()
+	online := 0
+	for uid := range unique {
+		if a.spaceRole(uid, sid) != "" {
+			online++
+		}
+	}
+	if strings.HasPrefix(sid, "personal-") {
+		members = 1
+	}
 	reply(w, 200, map[string]any{"used": used, "quota": Quota, "members": members, "online": online, "activity": activity, "maxUpload": MaxUpload})
 }
 func (a *App) members(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.Query("SELECT id,username,name,role FROM users ORDER BY created")
+	query := "SELECT id,username,name,role,disabled FROM users"
+	if current(r).Role != "admin" {
+		query += " WHERE disabled=0"
+	}
+	query += " ORDER BY created"
+	rows, err := a.DB.Query(query)
 	if err != nil {
 		fail(w, 500, "读取成员失败")
 		return
@@ -760,14 +937,14 @@ func (a *App) members(w http.ResponseWriter, r *http.Request) {
 	users := []User{}
 	for rows.Next() {
 		var u User
-		if rows.Scan(&u.ID, &u.Username, &u.Name, &u.Role) == nil {
+		if rows.Scan(&u.ID, &u.Username, &u.Name, &u.Role, &u.Disabled) == nil {
 			users = append(users, u)
 		}
 	}
 	reply(w, 200, users)
 }
 
-var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,32}$`)
+var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9_.-]{3,32}$`)
 
 func (a *App) addMember(w http.ResponseWriter, r *http.Request) {
 	if current(r).Role != "admin" {
@@ -791,7 +968,25 @@ func (a *App) addMember(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "创建成员失败")
 		return
 	}
-	_, err = a.DB.Exec("INSERT INTO users (id,username,name,role,password,created) VALUES (?,?,?,?,?,?)", token(), in.Username, strings.TrimSpace(in.Name), "member", string(hash), time.Now().UnixMilli())
+	a.accessMu.Lock()
+	defer a.accessMu.Unlock()
+	uid := token()
+	tx, err := a.DB.Begin()
+	if err != nil {
+		fail(w, 500, "创建成员失败")
+		return
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec("INSERT INTO users (id,username,name,role,password,created) VALUES (?,?,?,?,?,?)", uid, in.Username, strings.TrimSpace(in.Name), "member", string(hash), time.Now().UnixMilli())
+	if err == nil {
+		_, err = tx.Exec("INSERT INTO spaces (id,name,kind,owner_id,created) VALUES (?,'我的文件','personal',?,?)", personalSpace(uid), uid, time.Now().UnixMilli())
+	}
+	if err == nil {
+		_, err = tx.Exec("INSERT INTO space_members (space_id,user_id,role) VALUES ('team',?,'editor')", uid)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
 	if err != nil {
 		fail(w, 409, "账号已存在或创建失败")
 		return
