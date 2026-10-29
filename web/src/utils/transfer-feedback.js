@@ -1,4 +1,5 @@
 export function transferLabel(task) {
+  if (task.status === 'cancelled') return '已取消';
   if (task.status === 'done') return '上传完成';
   if (task.status === 'error') return '上传失败';
   if (task.status === 'waiting') return task.attempts ? '等待重新上传' : '等待上传';

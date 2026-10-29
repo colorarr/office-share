@@ -3,6 +3,7 @@ import { ref, watch } from 'vue';
 import AppIcon from './AppIcon.vue';
 import FileMark from './FileMark.vue';
 import { readTextPreview } from '../api/file-preview.js';
+import { fileVisualKind } from '../utils/file-presentation.js';
 import { supportsTextPreview } from '../utils/text-preview.js';
 
 const props = defineProps({ item: { type: Object, required: true } });
@@ -68,6 +69,15 @@ watch(
       <p v-else class="document-preview-empty">这是一个空文档。</p>
     </template>
   </section>
+  <object
+    v-else-if="fileVisualKind(item) === 'pdf' && item.capabilities?.download !== false"
+    type="application/pdf"
+    :data="`/api/files/${encodeURIComponent(item.id)}?preview=1`"
+    class="pdf-document"
+    aria-label="PDF 文档预览"
+  >
+    <p class="dialog-note">可下载原 PDF 文件，使用文档应用查看。</p>
+  </object>
   <div v-else class="file-preview">
     <FileMark :item="item" large />
     <h3>{{ item.name }}</h3>

@@ -1,6 +1,16 @@
 import { decodePreviewBytes, TEXT_PREVIEW_BYTES } from '../utils/text-preview.js';
 
 export async function readTextPreview(item, signal) {
+  if (item.capabilities?.download === false) {
+    const response = await fetch(`/api/items/${encodeURIComponent(item.id)}/preview`, {
+      credentials: 'same-origin',
+      signal,
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '读取预览失败');
+    return { content: data.text || '', encoding: 'UTF-8', truncated: !!data.truncated };
+  }
+
   const response = await fetch(`/api/files/${encodeURIComponent(item.id)}`, {
     credentials: 'same-origin',
     signal,
