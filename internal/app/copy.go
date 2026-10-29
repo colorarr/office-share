@@ -77,7 +77,7 @@ func (a *App) copyItem(w http.ResponseWriter, r *http.Request) {
 	a.quotaMu.Lock()
 	defer a.quotaMu.Unlock()
 	var used int64
-	if err = a.DB.QueryRow("SELECT COALESCE(SUM(size),0) FROM items WHERE kind IN ('file','image')").Scan(&used); err != nil {
+	if err = a.DB.QueryRowContext(r.Context(), "SELECT COALESCE(SUM(size),0) FROM items WHERE space_id=? AND kind IN ('file','image')", input.Space).Scan(&used); err != nil {
 		fail(w, 500, "读取容量失败")
 		return
 	}

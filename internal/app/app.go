@@ -756,7 +756,7 @@ func (a *App) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	a.quotaMu.Lock()
 	var used int64
-	err = a.DB.QueryRowContext(r.Context(), "SELECT COALESCE(SUM(size),0) FROM items WHERE kind IN ('file','image')").Scan(&used)
+	err = a.DB.QueryRowContext(r.Context(), "SELECT COALESCE(SUM(size),0) FROM items WHERE space_id=? AND kind IN ('file','image')", sid).Scan(&used)
 	if err != nil {
 		a.quotaMu.Unlock()
 		fail(w, 500, "读取空间容量失败，请重试")
@@ -798,13 +798,17 @@ func (a *App) upload(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) download(w http.ResponseWriter, r *http.Request) {
 	item, err := a.item(r.PathValue("id"))
-	inline := r.URL.Query().Get("preview") == "1" && item.Kind == "image"
-	if err != nil || !a.canReadItem(current(r).ID, item, inline) || (!inline && item.Deleted) || item.Kind == "folder" {
+	imagePreview := r.URL.Query().Get("preview") == "1" && item.Kind == "image"
+	pdfPreview := r.URL.Query().Get("preview") == "1" && item.Kind == "file" && item.MIME == "application/pdf"
+	allowTrashPreview := imagePreview && a.spaceRole(current(r).ID, item.SpaceID) != ""
+	// Recycle-bin image previews are for space members only. Invitees must use
+	// active-resource authorization before receiving a derived preview.
+	if err != nil || !a.canReadItem(current(r).ID, item, allowTrashPreview) || (!imagePreview && item.Deleted) || item.Kind == "folder" {
 		fail(w, 404, "文件不存在或已移入回收站")
 		return
 	}
 	if a.spaceRole(current(r).ID, item.SpaceID) == "" {
-		if inline {
+		if imagePreview {
 			a.serveSharedPreview(w, r, item)
 			return
 		}
@@ -813,7 +817,9 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	a.serveOriginal(w, r, item, inline)
+	// PDF embedding sends original bytes, so it must pass the same download
+	// capability check as an attachment, not the restricted image-preview path.
+	a.serveOriginal(w, r, item, imagePreview || pdfPreview)
 }
 func (a *App) broadcast() {
 	a.mu.Lock()

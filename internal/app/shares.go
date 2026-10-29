@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	_ "golang.org/x/image/webp"
 )
 
 type Share struct {
@@ -319,6 +321,12 @@ func (a *App) serveOriginal(w http.ResponseWriter, r *http.Request, item Item, i
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": item.Name}))
 	w.Header().Set("Content-Type", item.MIME)
 	w.Header().Set("Cache-Control", "no-store")
+	if inline && item.MIME == "application/pdf" {
+		// Narrow exception for an authenticated original-PDF preview. Other
+		// responses retain DENY, including attachments and restricted shares.
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
+	}
 	http.ServeContent(w, r, item.Name, modified, content)
 }
 func (a *App) serveSharedPreview(w http.ResponseWriter, r *http.Request, item Item) {
@@ -340,7 +348,7 @@ func (a *App) serveSharedPreview(w http.ResponseWriter, r *http.Request, item It
 		reply(w, 200, map[string]string{"text": item.Content})
 		return
 	}
-	if item.Kind == "image" && (item.MIME == "image/png" || item.MIME == "image/jpeg" || item.MIME == "image/gif") {
+	if item.Kind == "image" && (item.MIME == "image/png" || item.MIME == "image/jpeg" || item.MIME == "image/gif" || item.MIME == "image/webp") {
 		file, err := os.Open(filepath.Join(a.Data, "files", item.ID))
 		if err != nil {
 			fail(w, 404, "文件暂不可用")
